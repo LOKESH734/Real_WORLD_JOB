@@ -1,0 +1,23 @@
+# dependencies
+node_modules
+
+# build outputs
+dist
+build
+
+# VCS
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+
+# logs
+*.log
+
+# env
+.env
+
+# OS
+.DS_Store
