@@ -1,9 +1,11 @@
 pipeline {
     agent any
 
-    tools {
-        maven 'maven-3.9'
-        nodejs 'node-18'
+    environment {
+        AWS_REGION = "ap-south-1"
+        ECR_REGISTRY = "xxxxxxxxxxxx.dkr.ecr.ap-south-1.amazonaws.com"
+        BACKEND_REPO = "backend"
+        FRONTEND_REPO = "frontend"
     }
 
     stages {
@@ -11,69 +13,68 @@ pipeline {
         stage('Checkout Code') {
             steps {
                 git branch: 'main',
-                    url: 'https://github.com/your-org/realworldjob.git'
+                    url: 'https://github.com/LOKESH734/Real_WORLD_JOB.git'
             }
         }
 
-        stage('Backend Build') {
+        stage('Set Image Tag') {
             steps {
-                dir('backend') {
-                    sh 'mvn clean package -DskipTests'
+                script {
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: "git rev-parse --short HEAD",
+                        returnStdout: true
+                    ).trim()
                 }
             }
         }
 
-        stage('Frontend Build') {
+        stage('Verify Tools') {
             steps {
-                dir('frontend') {
+                sh '''
+                  docker --version
+                  aws --version
+                  mvn -version || true
+                  node --version || true
+                '''
+            }
+        }
+
+        stage('Login to ECR') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
                     sh '''
-                      npm ci
-                      npm run build
+                      aws ecr get-login-password \
+                      --region $AWS_REGION | \
+                      docker login --username AWS \
+                      --password-stdin $ECR_REGISTRY
                     '''
                 }
             }
         }
 
-        stage('Docker Build Images') {
+        stage('Build Docker Images') {
             steps {
                 sh '''
-                  docker build -t backend:local backend/
-                  docker build -t frontend:local frontend/
+                  docker build -t $BACKEND_REPO:$GIT_COMMIT_SHORT backend/
+                  docker build -t $FRONTEND_REPO:$GIT_COMMIT_SHORT frontend/
                 '''
             }
         }
 
-        stage('Load Images into Kubernetes') {
+        stage('Tag & Push to ECR') {
             steps {
                 sh '''
-                  minikube image load backend:local || true
-                  minikube image load frontend:local || true
-                '''
-            }
-        }
+                  docker tag $BACKEND_REPO:$GIT_COMMIT_SHORT \
+                    $ECR_REGISTRY/$BACKEND_REPO:$GIT_COMMIT_SHORT
 
-        stage('Deploy to Kubernetes') {
-            steps {
-                sh '''
-                  kubectl apply -f k8s/
-                '''
-            }
-        }
+                  docker tag $FRONTEND_REPO:$GIT_COMMIT_SHORT \
+                    $ECR_REGISTRY/$FRONTEND_REPO:$GIT_COMMIT_SHORT
 
-        stage('Setup Monitoring') {
-            steps {
-                sh '''
-                  kubectl apply -f monitoring/prometheus.yaml
-                  kubectl apply -f monitoring/grafana.yaml
-                '''
-            }
-        }
-
-        stage('Health Check') {
-            steps {
-                sh '''
-                  kubectl get pods
-                  kubectl get svc
+                  docker push $ECR_REGISTRY/$BACKEND_REPO:$GIT_COMMIT_SHORT
+                  docker push $ECR_REGISTRY/$FRONTEND_REPO:$GIT_COMMIT_SHORT
                 '''
             }
         }
@@ -81,10 +82,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ LOCAL CI/CD PIPELINE COMPLETED SUCCESSFULLY!"
+            echo "✅ CI SUCCESS: Images pushed to ECR"
         }
         failure {
-            echo "❌ PIPELINE FAILED – CHECK LOGS"
+            echo "❌ CI FAILED"
         }
     }
 }
