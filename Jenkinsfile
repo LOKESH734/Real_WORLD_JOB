@@ -2,8 +2,9 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION = "ap-south-1"
-        ECR_REGISTRY = "xxxxxxxxxxxx.dkr.ecr.ap-south-1.amazonaws.com"
+        AWS_REGION   = "ap-south-2"
+        ACCOUNT_ID   = "123456789012"   // <-- PUT YOUR AWS ACCOUNT ID
+        ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
         BACKEND_REPO = "backend"
         FRONTEND_REPO = "frontend"
     }
@@ -31,10 +32,22 @@ pipeline {
         stage('Verify Tools') {
             steps {
                 bat '''
+                  echo ==== TOOL CHECK ====
                   docker --version
                   aws --version
                   git --version
                 '''
+            }
+        }
+
+        stage('AWS Identity Check') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+                    bat 'aws sts get-caller-identity --region %AWS_REGION%'
+                }
             }
         }
 
