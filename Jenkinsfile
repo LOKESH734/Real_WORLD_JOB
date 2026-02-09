@@ -3,10 +3,8 @@ pipeline {
 
     environment {
         AWS_REGION   = "ap-south-2"
-        ACCOUNT_ID   = "846345203699"   // ✅ your AWS account ID
+        ACCOUNT_ID   = "846345203699"
         ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-        BACKEND_REPO = "backend"
-        FRONTEND_REPO = "frontend"
     }
 
     stages {
@@ -21,7 +19,7 @@ pipeline {
         stage('Set Image Tag') {
             steps {
                 script {
-                    env.GIT_COMMIT_SHORT = bat(
+                    env.IMAGE_TAG = bat(
                         script: "git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
@@ -32,7 +30,6 @@ pipeline {
         stage('Verify Tools') {
             steps {
                 bat '''
-                  echo ==== TOOL CHECK ====
                   docker --version
                   aws --version
                   git --version
@@ -68,8 +65,8 @@ pipeline {
         stage('Build Docker Images') {
             steps {
                 script {
-                    bat "docker build -t backend:${env.GIT_COMMIT_SHORT} backend"
-                    bat "docker build -t frontend:${env.GIT_COMMIT_SHORT} frontend"
+                    bat "docker build -t backend:${env.IMAGE_TAG} backend"
+                    bat "docker build -t frontend:${env.IMAGE_TAG} frontend"
                 }
             }
         }
@@ -77,11 +74,11 @@ pipeline {
         stage('Tag & Push to ECR') {
             steps {
                 script {
-                    bat "docker tag backend:${env.GIT_COMMIT_SHORT} ${env.ECR_REGISTRY}/backend:${env.GIT_COMMIT_SHORT}"
-                    bat "docker tag frontend:${env.GIT_COMMIT_SHORT} ${env.ECR_REGISTRY}/frontend:${env.GIT_COMMIT_SHORT}"
+                    bat "docker tag backend:${env.IMAGE_TAG} ${env.ECR_REGISTRY}/backend:${env.IMAGE_TAG}"
+                    bat "docker tag frontend:${env.IMAGE_TAG} ${env.ECR_REGISTRY}/frontend:${env.IMAGE_TAG}"
 
-                    bat "docker push ${env.ECR_REGISTRY}/backend:${env.GIT_COMMIT_SHORT}"
-                    bat "docker push ${env.ECR_REGISTRY}/frontend:${env.GIT_COMMIT_SHORT}"
+                    bat "docker push ${env.ECR_REGISTRY}/backend:${env.IMAGE_TAG}"
+                    bat "docker push ${env.ECR_REGISTRY}/frontend:${env.IMAGE_TAG}"
                 }
             }
         }
@@ -89,7 +86,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ CI SUCCESS: Docker images built and pushed to AWS ECR"
+            echo "✅ CI SUCCESS: Images pushed to ECR"
         }
         failure {
             echo "❌ CI FAILED"
