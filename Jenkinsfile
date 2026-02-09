@@ -20,7 +20,7 @@ pipeline {
         stage('Set Image Tag') {
             steps {
                 script {
-                    env.GIT_COMMIT_SHORT = sh(
+                    env.GIT_COMMIT_SHORT = bat(
                         script: "git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
@@ -30,11 +30,10 @@ pipeline {
 
         stage('Verify Tools') {
             steps {
-                sh '''
+                bat '''
                   docker --version
                   aws --version
-                  mvn -version || true
-                  node --version || true
+                  git --version
                 '''
             }
         }
@@ -45,11 +44,9 @@ pipeline {
                     $class: 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'aws-creds'
                 ]]) {
-                    sh '''
-                      aws ecr get-login-password \
-                      --region $AWS_REGION | \
-                      docker login --username AWS \
-                      --password-stdin $ECR_REGISTRY
+                    bat '''
+                      aws ecr get-login-password --region %AWS_REGION% ^
+                      | docker login --username AWS --password-stdin %ECR_REGISTRY%
                     '''
                 }
             }
@@ -57,24 +54,24 @@ pipeline {
 
         stage('Build Docker Images') {
             steps {
-                sh '''
-                  docker build -t $BACKEND_REPO:$GIT_COMMIT_SHORT backend/
-                  docker build -t $FRONTEND_REPO:$GIT_COMMIT_SHORT frontend/
+                bat '''
+                  docker build -t %BACKEND_REPO%:%GIT_COMMIT_SHORT% backend
+                  docker build -t %FRONTEND_REPO%:%GIT_COMMIT_SHORT% frontend
                 '''
             }
         }
 
         stage('Tag & Push to ECR') {
             steps {
-                sh '''
-                  docker tag $BACKEND_REPO:$GIT_COMMIT_SHORT \
-                    $ECR_REGISTRY/$BACKEND_REPO:$GIT_COMMIT_SHORT
+                bat '''
+                  docker tag %BACKEND_REPO%:%GIT_COMMIT_SHORT% ^
+                    %ECR_REGISTRY%/%BACKEND_REPO%:%GIT_COMMIT_SHORT%
 
-                  docker tag $FRONTEND_REPO:$GIT_COMMIT_SHORT \
-                    $ECR_REGISTRY/$FRONTEND_REPO:$GIT_COMMIT_SHORT
+                  docker tag %FRONTEND_REPO%:%GIT_COMMIT_SHORT% ^
+                    %ECR_REGISTRY%/%FRONTEND_REPO%:%GIT_COMMIT_SHORT%
 
-                  docker push $ECR_REGISTRY/$BACKEND_REPO:$GIT_COMMIT_SHORT
-                  docker push $ECR_REGISTRY/$FRONTEND_REPO:$GIT_COMMIT_SHORT
+                  docker push %ECR_REGISTRY%/%BACKEND_REPO%:%GIT_COMMIT_SHORT%
+                  docker push %ECR_REGISTRY%/%FRONTEND_REPO%:%GIT_COMMIT_SHORT%
                 '''
             }
         }
