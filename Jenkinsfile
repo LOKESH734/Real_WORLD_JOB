@@ -64,8 +64,9 @@ for /f %%i in ('git rev-parse --short HEAD') do @echo %%i
 
         stage('Build Docker Images') {
             steps {
-                bat "docker build -t backend:${env.IMAGE_TAG} backend"
-                bat "docker build -t frontend:${env.IMAGE_TAG} frontend"
+                // ✅ MATCHES YOUR REAL FOLDERS
+                bat "docker build -t backend:${env.IMAGE_TAG} realWordJob"
+                bat "docker build -t frontend:${env.IMAGE_TAG} job-portal-frontend69"
             }
         }
 
@@ -82,7 +83,7 @@ for /f %%i in ('git rev-parse --short HEAD') do @echo %%i
 
     post {
         success {
-            echo "✅ CI SUCCESS – Docker images built & pushed to AWS ECR"
+            echo "✅ CI SUCCESS – Images built & pushed to AWS ECR"
         }
         failure {
             echo "❌ CI FAILED"
