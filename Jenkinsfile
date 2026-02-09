@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         AWS_REGION   = "ap-south-2"
-        ACCOUNT_ID   = "846345203699"   // <-- PUT YOUR AWS ACCOUNT ID
+        ACCOUNT_ID   = "846345203699"   // ✅ your AWS account ID
         ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
         BACKEND_REPO = "backend"
         FRONTEND_REPO = "frontend"
@@ -46,7 +46,7 @@ pipeline {
                     $class: 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'aws-creds'
                 ]]) {
-                    bat 'aws sts get-caller-identity --region %AWS_REGION%'
+                    bat "aws sts get-caller-identity --region %AWS_REGION%"
                 }
             }
         }
@@ -67,32 +67,29 @@ pipeline {
 
         stage('Build Docker Images') {
             steps {
-                bat '''
-                  docker build -t %BACKEND_REPO%:%GIT_COMMIT_SHORT% backend
-                  docker build -t %FRONTEND_REPO%:%GIT_COMMIT_SHORT% frontend
-                '''
+                script {
+                    bat "docker build -t backend:${env.GIT_COMMIT_SHORT} backend"
+                    bat "docker build -t frontend:${env.GIT_COMMIT_SHORT} frontend"
+                }
             }
         }
 
         stage('Tag & Push to ECR') {
             steps {
-                bat '''
-                  docker tag %BACKEND_REPO%:%GIT_COMMIT_SHORT% ^
-                    %ECR_REGISTRY%/%BACKEND_REPO%:%GIT_COMMIT_SHORT%
+                script {
+                    bat "docker tag backend:${env.GIT_COMMIT_SHORT} ${env.ECR_REGISTRY}/backend:${env.GIT_COMMIT_SHORT}"
+                    bat "docker tag frontend:${env.GIT_COMMIT_SHORT} ${env.ECR_REGISTRY}/frontend:${env.GIT_COMMIT_SHORT}"
 
-                  docker tag %FRONTEND_REPO%:%GIT_COMMIT_SHORT% ^
-                    %ECR_REGISTRY%/%FRONTEND_REPO%:%GIT_COMMIT_SHORT%
-
-                  docker push %ECR_REGISTRY%/%BACKEND_REPO%:%GIT_COMMIT_SHORT%
-                  docker push %ECR_REGISTRY%/%FRONTEND_REPO%:%GIT_COMMIT_SHORT%
-                '''
+                    bat "docker push ${env.ECR_REGISTRY}/backend:${env.GIT_COMMIT_SHORT}"
+                    bat "docker push ${env.ECR_REGISTRY}/frontend:${env.GIT_COMMIT_SHORT}"
+                }
             }
         }
     }
 
     post {
         success {
-            echo "✅ CI SUCCESS: Images pushed to ECR"
+            echo "✅ CI SUCCESS: Docker images built and pushed to AWS ECR"
         }
         failure {
             echo "❌ CI FAILED"
