@@ -20,9 +20,13 @@ pipeline {
             steps {
                 script {
                     env.IMAGE_TAG = bat(
-                        script: 'git rev-parse --short HEAD',
+                        script: '''
+@echo off
+for /f %%i in ('git rev-parse --short HEAD') do @echo %%i
+''',
                         returnStdout: true
                     ).trim()
+
                     echo "IMAGE_TAG = ${env.IMAGE_TAG}"
                 }
             }
@@ -78,7 +82,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ CI SUCCESS – Images pushed to ECR"
+            echo "✅ CI SUCCESS – Docker images built & pushed to AWS ECR"
         }
         failure {
             echo "❌ CI FAILED"
