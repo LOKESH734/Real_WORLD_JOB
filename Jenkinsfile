@@ -20,20 +20,19 @@ pipeline {
             steps {
                 script {
                     env.IMAGE_TAG = bat(
-                        script: "git rev-parse --short HEAD",
+                        script: 'git rev-parse --short HEAD',
                         returnStdout: true
                     ).trim()
+                    echo "IMAGE_TAG = ${env.IMAGE_TAG}"
                 }
             }
         }
 
         stage('Verify Tools') {
             steps {
-                bat '''
-                  docker --version
-                  aws --version
-                  git --version
-                '''
+                bat 'docker --version'
+                bat 'aws --version'
+                bat 'git --version'
             }
         }
 
@@ -43,7 +42,7 @@ pipeline {
                     $class: 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'aws-creds'
                 ]]) {
-                    bat "aws sts get-caller-identity --region %AWS_REGION%"
+                    bat "aws sts get-caller-identity --region ${AWS_REGION}"
                 }
             }
         }
@@ -54,39 +53,32 @@ pipeline {
                     $class: 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'aws-creds'
                 ]]) {
-                    bat '''
-                      aws ecr get-login-password --region %AWS_REGION% ^
-                      | docker login --username AWS --password-stdin %ECR_REGISTRY%
-                    '''
+                    bat "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}"
                 }
             }
         }
 
         stage('Build Docker Images') {
             steps {
-                script {
-                    bat "docker build -t backend:${env.IMAGE_TAG} backend"
-                    bat "docker build -t frontend:${env.IMAGE_TAG} frontend"
-                }
+                bat "docker build -t backend:${env.IMAGE_TAG} backend"
+                bat "docker build -t frontend:${env.IMAGE_TAG} frontend"
             }
         }
 
         stage('Tag & Push to ECR') {
             steps {
-                script {
-                    bat "docker tag backend:${env.IMAGE_TAG} ${env.ECR_REGISTRY}/backend:${env.IMAGE_TAG}"
-                    bat "docker tag frontend:${env.IMAGE_TAG} ${env.ECR_REGISTRY}/frontend:${env.IMAGE_TAG}"
+                bat "docker tag backend:${env.IMAGE_TAG} ${ECR_REGISTRY}/backend:${env.IMAGE_TAG}"
+                bat "docker tag frontend:${env.IMAGE_TAG} ${ECR_REGISTRY}/frontend:${env.IMAGE_TAG}"
 
-                    bat "docker push ${env.ECR_REGISTRY}/backend:${env.IMAGE_TAG}"
-                    bat "docker push ${env.ECR_REGISTRY}/frontend:${env.IMAGE_TAG}"
-                }
+                bat "docker push ${ECR_REGISTRY}/backend:${env.IMAGE_TAG}"
+                bat "docker push ${ECR_REGISTRY}/frontend:${env.IMAGE_TAG}"
             }
         }
     }
 
     post {
         success {
-            echo "✅ CI SUCCESS: Images pushed to ECR"
+            echo "✅ CI SUCCESS – Images pushed to ECR"
         }
         failure {
             echo "❌ CI FAILED"
