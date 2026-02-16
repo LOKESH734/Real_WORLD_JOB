@@ -1,0 +1,27 @@
+# Java
+target/
+*.class
+
+# Node
+node_modules/
+dist/
+
+# Env
+.env
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+
+# Docker
+*.tar
+.terraform/
+.terraform/
+.terraform/

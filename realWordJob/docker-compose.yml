@@ -1,0 +1,48 @@
+version: "3.8"
+
+volumes:
+  mysql-data:
+
+services:
+  db:
+    image: mysql:8
+    container_name: mysql-db
+    environment:
+      MYSQL_DATABASE: JobReal
+      MYSQL_ROOT_PASSWORD: tiger
+    ports:
+      - "3307:3306"        # Host → Container
+    volumes:
+      - mysql-data:/var/lib/mysql   # ✅ PERSISTENT DATA
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: .
+    container_name: spring-backend
+    ports:
+      - "8086:8086"
+    environment:
+      DB_URL: jdbc:mysql://db:3306/JobReal?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USER: root
+      DB_PASS: tiger
+
+      MAIL_HOST: smtp.gmail.com
+      MAIL_PORT: 587
+      MAIL_USER: lokeshkanneboina7@gmail.com
+      MAIL_PASS: iwimxyhvkvphgckg
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: C:\Users\lokes\job-portal-frontend69
+    container_name: react-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
