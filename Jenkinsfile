@@ -91,13 +91,24 @@ pipeline {
         }
 
         stage('Deploy to EKS') {
-            steps {
-                sh """
-                    kubectl set image deployment/backend backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
-                    kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
-                """
-            }
+    steps {
+        withCredentials([[
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: 'aws-creds'
+        ]]) {
+            sh """
+                aws eks update-kubeconfig --region ${AWS_REGION} --name realworld-eks
+
+                kubectl set image deployment/backend \
+                backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
+
+                kubectl set image deployment/frontend \
+                frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
+            """
         }
+    }
+}
+
 
         stage('Verify Rollout') {
             steps {
