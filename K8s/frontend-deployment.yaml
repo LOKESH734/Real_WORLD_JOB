@@ -2,8 +2,16 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
+  labels:
+    app: frontend
+    tier: web
 spec:
   replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
       app: frontend
@@ -11,9 +19,33 @@ spec:
     metadata:
       labels:
         app: frontend
+        tier: web
     spec:
       containers:
         - name: frontend
-          image: 846345203699.dkr.ecr.ap-south-2.amazonaws.com/frontend:latest
+          image: 846345203699.dkr.ecr.ap-south-2.amazonaws.com/frontend:dc1690e
+          imagePullPolicy: Always
           ports:
             - containerPort: 80
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20

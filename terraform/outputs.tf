@@ -3,7 +3,5 @@ output "cluster_name" {
 }
 
 output "kubeconfig_command" {
-  value = "aws eks update-kubeconfig --region ap-south-2 --name ${module.eks.cluster_name}"
+  value = "aws eks update-kubeconfig --region ${var.aws_region} --name ${module.eks.cluster_name}"
 }
-
-

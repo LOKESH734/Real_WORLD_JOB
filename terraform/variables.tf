@@ -1,12 +1,15 @@
 variable "aws_region" {
-  default = "ap-south-1"
+  type = string
 }
 
 variable "cluster_name" {
-  default = "realworld-eks"
+  type = string
 }
 
 variable "node_instance_type" {
-  default = "t3.medium"
-  
+  type = string
+}
+
+variable "environment" {
+  type = string
 }

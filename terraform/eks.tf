@@ -8,32 +8,41 @@ module "eks" {
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
-  # ✅ PUBLIC ACCESS (Important for Codespaces / Jenkins outside VPC)
+  enable_irsa = true
+
   cluster_endpoint_public_access  = true
   cluster_endpoint_private_access = true
 
-  # Optional but recommended
-  cluster_endpoint_public_access_cidrs = ["0.0.0.0/0"]
+  cluster_endpoint_public_access_cidrs = ["4.240.18.224/32"]
 
-  # ✅ New EKS Authentication Mode
+  cluster_enabled_log_types = [
+    "api",
+    "audit",
+    "authenticator",
+    "controllerManager",
+    "scheduler"
+  ]
+
   authentication_mode = "API"
-
-  # ✅ Automatically give admin access to creator (jenkins-ci-user)
   enable_cluster_creator_admin_permissions = true
 
-  # ✅ Managed Node Group
   eks_managed_node_groups = {
     default = {
-      instance_types = ["t3.small"]   # ⚠️ Free tier NOT supported by EKS properly
+      instance_types = [var.node_instance_type]
       desired_size   = 1
       max_size       = 2
       min_size       = 1
       capacity_type  = "ON_DEMAND"
+
+      disk_size = 20
+
+      labels = {
+        role = "general"
+      }
+
+      tags = local.common_tags
     }
   }
 
-  tags = {
-    Environment = "dev"
-    Project     = "realworld"
-  }
+  tags = local.common_tags
 }
