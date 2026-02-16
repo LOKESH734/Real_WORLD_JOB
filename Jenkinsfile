@@ -99,15 +99,15 @@ pipeline {
             sh """
                 aws eks update-kubeconfig --region ${AWS_REGION} --name realworld-eks
 
-                kubectl set image deployment/backend \
-                backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
+                kubectl apply -f k8s/
 
-                kubectl set image deployment/frontend \
-                frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
+                kubectl rollout status deployment/backend
+                kubectl rollout status deployment/frontend
             """
         }
     }
 }
+
 
 
         stage('Verify Rollout') {
