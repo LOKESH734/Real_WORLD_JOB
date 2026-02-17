@@ -3,4 +3,6 @@ kind: ConfigMap
 metadata:
   name: backend-config
 data:
-  DB_URL: jdbc:mysql://mysql-service:3306/JobReal
+  DB_URL: jdbc:mysql://mysql-service:3306/realworld?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+  MAIL_HOST: smtp.gmail.com
+  MAIL_PORT: "587"
