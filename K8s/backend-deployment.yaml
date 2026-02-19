@@ -5,29 +5,36 @@ metadata:
   labels:
     app: backend
     tier: api
+
 spec:
-  replicas: 2
+  replicas: 1
+  progressDeadlineSeconds: 600
+  revisionHistoryLimit: 2
+
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 1
+      maxUnavailable: 0
       maxSurge: 1
+
   selector:
     matchLabels:
       app: backend
+
   template:
     metadata:
       labels:
         app: backend
         tier: api
+
     spec:
       containers:
         - name: backend
-          image: 846345203699.dkr.ecr.ap-south-2.amazonaws.com/backend:dc1690e
+          image: 846345203699.dkr.ecr.ap-south-2.amazonaws.com/backend:fix1
           imagePullPolicy: Always
 
           ports:
-            - containerPort: 8086   # IMPORTANT: your app runs on 8086
+            - containerPort: 8086
 
           envFrom:
             - configMapRef:
@@ -43,16 +50,32 @@ spec:
               cpu: "500m"
               memory: "512Mi"
 
-          readinessProbe:
+          # 🔥 STARTUP PROBE (FIXED TIMING)
+          startupProbe:
             httpGet:
               path: /actuator/health
               port: 8086
-            initialDelaySeconds: 15
-            periodSeconds: 10
+            initialDelaySeconds: 60
+            periodSeconds: 5
+            failureThreshold: 60
+            timeoutSeconds: 2
 
+          # ✅ READINESS PROBE
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8086
+            initialDelaySeconds: 70
+            periodSeconds: 10
+            failureThreshold: 5
+            timeoutSeconds: 2
+
+          # ✅ LIVENESS PROBE
           livenessProbe:
             httpGet:
-              path: /health
+              path: /actuator/health/liveness
               port: 8086
-            initialDelaySeconds: 30
-            periodSeconds: 15
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            failureThreshold: 5
+            timeoutSeconds: 2

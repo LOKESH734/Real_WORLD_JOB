@@ -3,6 +3,7 @@ package org.spring1.realwordjob.security;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -13,7 +14,6 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
-import org.springframework.http.HttpMethod;
 
 @Configuration
 @EnableWebSecurity
@@ -27,42 +27,39 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
 
         http
-                .csrf(csrf -> csrf.disable())
-                .cors(cors -> {})   // ✅ enable CORS
+            .csrf(csrf -> csrf.disable())
 
-                .authorizeHttpRequests(auth -> auth
+            .cors(cors -> {}) // Enable CORS
 
-                        // ✅ ALLOW PREFLIGHT (🔥 THIS WAS MISSING 🔥)
-                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+            .authorizeHttpRequests(auth -> auth
 
-                        // ✅ Swagger
-                        .requestMatchers(
-                                "/v3/api-docs/**",
-                                "/swagger-ui/**",
-                                "/swagger-ui.html",
-                                "/swagger-resources/**",
-                                "/swagger-resources",
-                                "/webjars/**"
-                        ).permitAll()
+                // ✅ Allow preflight CORS
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                        // ✅ Actuator
-                        .requestMatchers(
-                                "/actuator/health",
-                                "/actuator/info"
-                        ).permitAll()
+                // ✅ Allow Actuator for Kubernetes probes
+                .requestMatchers("/actuator/**").permitAll()
 
-                        // ✅ Auth APIs
-                        .requestMatchers("/auth/**").permitAll()
+                // ✅ Swagger OpenAPI
+                .requestMatchers(
+                        "/v3/api-docs/**",
+                        "/swagger-ui/**",
+                        "/swagger-ui.html",
+                        "/swagger-resources/**",
+                        "/webjars/**"
+                ).permitAll()
 
-                        // 🔒 Everything else
-                        .anyRequest().authenticated()
-                )
+                // ✅ Public Auth APIs
+                .requestMatchers("/auth/**").permitAll()
 
-                .sessionManagement(session ->
-                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-                );
+                // 🔒 Everything else secured
+                .anyRequest().authenticated()
+            )
 
-        // JWT filter
+            .sessionManagement(session ->
+                session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+            );
+
+        // 🔐 Add JWT filter before UsernamePasswordAuthenticationFilter
         http.addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
