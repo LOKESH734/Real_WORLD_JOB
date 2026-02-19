@@ -110,15 +110,22 @@ pipeline {
 
 
 
-        stage('Verify Rollout') {
-            steps {
-                sh """
-                    kubectl rollout status deployment/backend --timeout=120s
-                    kubectl rollout status deployment/frontend --timeout=120s
-                """
-            }
+       stage('Verify Rollout') {
+    steps {
+        withCredentials([[
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: 'aws-creds'
+        ]]) {
+            sh """
+                aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+
+                kubectl rollout status deployment/backend --timeout=120s
+                kubectl rollout status deployment/frontend --timeout=120s
+            """
         }
     }
+}
+
 
     post {
         success {
