@@ -38,37 +38,6 @@ pipeline {
             }
         }
 
-        stage('Authenticate AWS') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-
-                    sh """
-                        aws sts get-caller-identity --region ${AWS_REGION}
-                        aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-                    """
-                }
-            }
-        }
-
-        
-        stage('Login to ECR') {
-    steps {
-        withCredentials([[
-            $class: 'AmazonWebServicesCredentialsBinding',
-            credentialsId: 'aws-creds'
-        ]]) {
-            sh """
-                aws ecr get-login-password --region ${AWS_REGION} \
-                | docker login --username AWS --password-stdin ${ECR_REGISTRY}
-            """
-        }
-    }
-}
-
-
         stage('Build Docker Images') {
             steps {
                 sh """
@@ -78,54 +47,44 @@ pipeline {
             }
         }
 
-        stage('Tag & Push to ECR') {
+        stage('Push to ECR') {
             steps {
-                sh """
-                    docker tag backend:${IMAGE_TAG} ${ECR_REGISTRY}/backend:${IMAGE_TAG}
-                    docker tag frontend:${IMAGE_TAG} ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+                    sh """
+                        aws ecr get-login-password --region ${AWS_REGION} \
+                        | docker login --username AWS --password-stdin ${ECR_REGISTRY}
 
-                    docker push ${ECR_REGISTRY}/backend:${IMAGE_TAG}
-                    docker push ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
-                """
+                        docker tag backend:${IMAGE_TAG} ${ECR_REGISTRY}/backend:${IMAGE_TAG}
+                        docker tag frontend:${IMAGE_TAG} ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
+
+                        docker push ${ECR_REGISTRY}/backend:${IMAGE_TAG}
+                        docker push ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
+                    """
+                }
             }
         }
 
         stage('Deploy to EKS') {
-    steps {
-        withCredentials([[
-            $class: 'AmazonWebServicesCredentialsBinding',
-            credentialsId: 'aws-creds'
-        ]]) {
-            sh """
-                aws eks update-kubeconfig --region ${AWS_REGION} --name realworld-eks
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+                    sh """
+                        aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                kubectl apply -f K8s/
+                        kubectl apply -f K8s/
 
-                kubectl rollout status deployment/backend
-                kubectl rollout status deployment/frontend
-            """
+                        kubectl rollout status deployment/backend --timeout=180s
+                        kubectl rollout status deployment/frontend --timeout=180s
+                    """
+                }
+            }
         }
     }
-}
-
-
-
-       stage('Verify Rollout') {
-    steps {
-        withCredentials([[
-            $class: 'AmazonWebServicesCredentialsBinding',
-            credentialsId: 'aws-creds'
-        ]]) {
-            sh """
-                aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-
-                kubectl rollout status deployment/backend --timeout=120s
-                kubectl rollout status deployment/frontend --timeout=120s
-            """
-        }
-    }
-}
-
 
     post {
         success {
