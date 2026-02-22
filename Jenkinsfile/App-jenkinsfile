@@ -1,4 +1,10 @@
 pipeline {
+    stage('Clean Workspace') {
+    steps {
+        deleteDir()
+    }
+}
+
     agent {
         docker {
             image 'lokeshkanneboina7/devops-agent:latest'
