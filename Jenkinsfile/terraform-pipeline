@@ -10,9 +10,19 @@ pipeline {
         AWS_REGION = "ap-south-2"
     }
 
+    options {
+        skipDefaultCheckout(true)
+    }
+
     stages {
 
-        stage('Checkout') {
+        stage('Clean Workspace') {
+            steps {
+                deleteDir()
+            }
+        }
+
+        stage('Checkout Code') {
             steps {
                 git branch: 'main',
                     url: 'https://github.com/LOKESH734/Real_WORLD_JOB.git'
@@ -21,30 +31,54 @@ pipeline {
 
         stage('Terraform Init') {
             steps {
-                dir('terraform') {
-                    sh 'terraform init'
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+                    dir('terraform') {
+                        sh '''
+                        export AWS_DEFAULT_REGION=${AWS_REGION}
+                        terraform init
+                        '''
+                    }
                 }
             }
         }
 
         stage('Terraform Plan') {
             steps {
-                dir('terraform') {
-                    sh 'terraform plan -out=tfplan'
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+                    dir('terraform') {
+                        sh '''
+                        export AWS_DEFAULT_REGION=${AWS_REGION}
+                        terraform plan -out=tfplan
+                        '''
+                    }
                 }
             }
         }
 
         stage('Approval') {
             steps {
-                input message: "Apply Terraform?"
+                input message: "Do you want to apply Terraform changes?"
             }
         }
 
         stage('Terraform Apply') {
             steps {
-                dir('terraform') {
-                    sh 'terraform apply -auto-approve tfplan'
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+                    dir('terraform') {
+                        sh '''
+                        export AWS_DEFAULT_REGION=${AWS_REGION}
+                        terraform apply -auto-approve tfplan
+                        '''
+                    }
                 }
             }
         }
@@ -53,6 +87,15 @@ pipeline {
             steps {
                 build job: 'App-Jenkinsfile'
             }
+        }
+    }
+
+    post {
+        success {
+            echo "🚀 Infra + App Deployment Successful"
+        }
+        failure {
+            echo "❌ Terraform Pipeline Failed"
         }
     }
 }
