@@ -1,7 +1,7 @@
 pipeline {
     agent {
         docker {
-            image 'docker:24.0.7-cli'
+            image 'lokesh/devops-agent:latest'
             args '-v /var/run/docker.sock:/var/run/docker.sock'
         }
     }
@@ -14,22 +14,6 @@ pipeline {
     }
 
     stages {
-
-        stage('Install Tools') {
-            steps {
-                sh '''
-                    apk add --no-cache curl unzip bash git python3 py3-pip
-
-                    # Install AWS CLI
-                    pip3 install awscli
-
-                    # Install kubectl
-                    curl -LO "https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl"
-                    chmod +x kubectl
-                    mv kubectl /usr/local/bin/
-                '''
-            }
-        }
 
         stage('Checkout Code') {
             steps {
@@ -53,9 +37,11 @@ pipeline {
 
         stage('Verify Tools') {
             steps {
-                sh 'docker --version'
-                sh 'aws --version'
-                sh 'kubectl version --client'
+                sh '''
+                docker --version
+                aws --version
+                kubectl version --client
+                '''
             }
         }
 
