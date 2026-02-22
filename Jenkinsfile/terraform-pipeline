@@ -1,5 +1,10 @@
 pipeline {
-    agent any
+    agent {
+        docker {
+            image 'lokeshkanneboina7/devops-agent:latest'
+            args '-v /var/run/docker.sock:/var/run/docker.sock'
+        }
+    }
 
     environment {
         AWS_REGION = "ap-south-2"
@@ -16,45 +21,30 @@ pipeline {
 
         stage('Terraform Init') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-                    dir('terraform') {
-                        sh 'terraform init'
-                    }
+                dir('terraform') {
+                    sh 'terraform init'
                 }
             }
         }
 
         stage('Terraform Plan') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-                    dir('terraform') {
-                        sh 'terraform plan -out=tfplan'
-                    }
+                dir('terraform') {
+                    sh 'terraform plan -out=tfplan'
                 }
             }
         }
 
         stage('Approval') {
             steps {
-                input message: "Do you want to apply Terraform changes?"
+                input message: "Apply Terraform?"
             }
         }
 
         stage('Terraform Apply') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-                    dir('terraform') {
-                        sh 'terraform apply -auto-approve tfplan'
-                    }
+                dir('terraform') {
+                    sh 'terraform apply -auto-approve tfplan'
                 }
             }
         }
@@ -63,15 +53,6 @@ pipeline {
             steps {
                 build job: 'App-Jenkinsfile'
             }
-        }
-    }
-
-    post {
-        success {
-            echo "🚀 Infra + App Deployment Successful"
-        }
-        failure {
-            echo "❌ Terraform Pipeline Failed"
         }
     }
 }
