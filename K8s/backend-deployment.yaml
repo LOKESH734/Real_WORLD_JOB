@@ -50,7 +50,7 @@ spec:
               cpu: "500m"
               memory: "512Mi"
 
-          # 🔥 STARTUP PROBE (FIXED TIMING)
+          # 🔥 STARTUP PROBE (SAFE)
           startupProbe:
             httpGet:
               path: /actuator/health
@@ -60,22 +60,22 @@ spec:
             failureThreshold: 60
             timeoutSeconds: 2
 
-          # ✅ READINESS PROBE
+          # ✅ READINESS PROBE (FIXED)
           readinessProbe:
             httpGet:
-              path: /actuator/health/readiness
+              path: /actuator/health
               port: 8086
-            initialDelaySeconds: 70
-            periodSeconds: 10
+            initialDelaySeconds: 90
+            periodSeconds: 15
             failureThreshold: 5
             timeoutSeconds: 2
 
-          # ✅ LIVENESS PROBE
+          # ✅ LIVENESS PROBE (FIXED)
           livenessProbe:
             httpGet:
-              path: /actuator/health/liveness
+              path: /actuator/health
               port: 8086
-            initialDelaySeconds: 90
+            initialDelaySeconds: 120
             periodSeconds: 20
             failureThreshold: 5
             timeoutSeconds: 2
