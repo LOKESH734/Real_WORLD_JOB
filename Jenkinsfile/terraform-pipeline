@@ -85,7 +85,7 @@ pipeline {
 
         stage('Trigger App Deployment') {
             steps {
-                build job: 'App-Jenkinsfile'
+                build job: 'ritu'
             }
         }
     }
