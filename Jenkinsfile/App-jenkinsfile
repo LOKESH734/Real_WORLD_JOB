@@ -25,13 +25,6 @@ stage('Checkout Code') {
     }
 }
 
-        stage('Checkout Code') {
-            steps {
-                git branch: 'main',
-                    url: 'https://github.com/LOKESH734/Real_WORLD_JOB.git'
-            }
-        }
-
         stage('Set Image Tag') {
             steps {
                 script {
