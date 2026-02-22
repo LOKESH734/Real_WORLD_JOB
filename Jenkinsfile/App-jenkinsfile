@@ -1,10 +1,5 @@
 pipeline {
-    
-    stage('Clean Workspace') {
-    steps {
-        deleteDir()
-    }
-}
+
 
     agent {
         docker {
@@ -21,6 +16,14 @@ pipeline {
     }
 
     stages {
+
+stage('Checkout Code') {
+    steps {
+        deleteDir()
+        git branch: 'main',
+            url: 'https://github.com/LOKESH734/Real_WORLD_JOB.git'
+    }
+}
 
         stage('Checkout Code') {
             steps {
