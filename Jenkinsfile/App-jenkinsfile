@@ -84,8 +84,15 @@ pipeline {
                     sh """
                         aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                        echo "🚀 Applying core resources..."
-                        kubectl apply -f K8s/ --exclude='*servicemonitor.yaml' || true
+                        echo "🚀 Applying core Kubernetes resources..."
+
+                        # Apply all YAML except ServiceMonitor
+                        for file in K8s/*.yaml; do
+                            if [[ "\$file" != *servicemonitor.yaml ]]; then
+                                echo "Applying \$file"
+                                kubectl apply -f \$file
+                            fi
+                        done
 
                         echo "⏳ Waiting for cluster stability..."
                         sleep 20
@@ -95,10 +102,10 @@ pipeline {
                             echo "✅ CRD exists → applying ServiceMonitor"
                             kubectl apply -f K8s/backend-servicemonitor.yaml
                         else
-                            echo "⚠️ CRD NOT found → skipping ServiceMonitor (safe)"
+                            echo "⚠️ CRD NOT found → skipping ServiceMonitor"
                         fi
 
-                        echo "🚀 Checking rollout..."
+                        echo "🚀 Waiting for rollout..."
                         kubectl rollout status deployment/backend --timeout=180s
                         kubectl rollout status deployment/frontend --timeout=180s
                     """
@@ -109,8 +116,11 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 sh """
+                    echo "🔍 Verifying pods..."
+
                     kubectl get pods -l app=backend
                     kubectl get pods -l app=frontend
+
                     echo "✅ Deployment Verified"
                 """
             }
