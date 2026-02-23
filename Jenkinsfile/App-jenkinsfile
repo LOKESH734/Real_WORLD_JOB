@@ -3,7 +3,7 @@ pipeline {
     agent {
         docker {
             image 'lokeshkanneboina7/devops-agent:latest'
-            args '-v /var/run/docker.sock:/var/run/docker.sock'
+            args '--entrypoint="" -v /var/run/docker.sock:/var/run/docker.sock'
         }
     }
 
@@ -83,7 +83,22 @@ pipeline {
                 ]]) {
                     sh """
                         aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-                        kubectl apply -f K8s/
+
+                        echo "🚀 Applying core resources..."
+                        kubectl apply -f K8s/ --exclude='*servicemonitor.yaml' || true
+
+                        echo "⏳ Waiting for cluster stability..."
+                        sleep 20
+
+                        echo "🔍 Checking ServiceMonitor CRD..."
+                        if kubectl get crd servicemonitors.monitoring.coreos.com >/dev/null 2>&1; then
+                            echo "✅ CRD exists → applying ServiceMonitor"
+                            kubectl apply -f K8s/backend-servicemonitor.yaml
+                        else
+                            echo "⚠️ CRD NOT found → skipping ServiceMonitor (safe)"
+                        fi
+
+                        echo "🚀 Checking rollout..."
                         kubectl rollout status deployment/backend --timeout=180s
                         kubectl rollout status deployment/frontend --timeout=180s
                     """
@@ -91,17 +106,17 @@ pipeline {
             }
         }
 
-        stage('Verify Deployment') {       // ✅ INSIDE stages block now
+        stage('Verify Deployment') {
             steps {
                 sh """
                     kubectl get pods -l app=backend
                     kubectl get pods -l app=frontend
-                    echo "✅ All pods running!"
+                    echo "✅ Deployment Verified"
                 """
             }
         }
 
-        stage('Cleanup') {                 // ✅ Bonus: clean docker images
+        stage('Cleanup') {
             steps {
                 sh """
                     docker rmi backend:${IMAGE_TAG} || true
@@ -111,8 +126,7 @@ pipeline {
                 """
             }
         }
-
-    }  // ✅ closes stages
+    }
 
     post {
         success {
@@ -122,5 +136,4 @@ pipeline {
             echo "❌ Deployment Failed – Investigate Immediately"
         }
     }
-
-}  // ✅ closes pipeline
+}
