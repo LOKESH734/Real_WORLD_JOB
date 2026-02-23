@@ -1,6 +1,5 @@
 pipeline {
 
-
     agent {
         docker {
             image 'lokeshkanneboina7/devops-agent:latest'
@@ -17,13 +16,13 @@ pipeline {
 
     stages {
 
-stage('Checkout Code') {
-    steps {
-        deleteDir()
-        git branch: 'main',
-            url: 'https://github.com/LOKESH734/Real_WORLD_JOB.git'
-    }
-}
+        stage('Checkout Code') {
+            steps {
+                deleteDir()
+                git branch: 'main',
+                    url: 'https://github.com/LOKESH734/Real_WORLD_JOB.git'
+            }
+        }
 
         stage('Set Image Tag') {
             steps {
@@ -32,7 +31,6 @@ stage('Checkout Code') {
                         script: "git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
-
                     echo "IMAGE_TAG = ${env.IMAGE_TAG}"
                 }
             }
@@ -41,9 +39,9 @@ stage('Checkout Code') {
         stage('Verify Tools') {
             steps {
                 sh '''
-                docker --version
-                aws --version
-                kubectl version --client
+                    docker --version
+                    aws --version
+                    kubectl version --client
                 '''
             }
         }
@@ -85,25 +83,36 @@ stage('Checkout Code') {
                 ]]) {
                     sh """
                         aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-
                         kubectl apply -f K8s/
-
                         kubectl rollout status deployment/backend --timeout=180s
                         kubectl rollout status deployment/frontend --timeout=180s
                     """
                 }
             }
         }
-    }
-    stage('Verify Deployment') {
-    steps {
-        sh """
-            kubectl get pods -l app=backend
-            kubectl get pods -l app=frontend
-            echo "✅ All pods running!"
-        """
-    }
-}
+
+        stage('Verify Deployment') {       // ✅ INSIDE stages block now
+            steps {
+                sh """
+                    kubectl get pods -l app=backend
+                    kubectl get pods -l app=frontend
+                    echo "✅ All pods running!"
+                """
+            }
+        }
+
+        stage('Cleanup') {                 // ✅ Bonus: clean docker images
+            steps {
+                sh """
+                    docker rmi backend:${IMAGE_TAG} || true
+                    docker rmi frontend:${IMAGE_TAG} || true
+                    docker rmi ${ECR_REGISTRY}/backend:${IMAGE_TAG} || true
+                    docker rmi ${ECR_REGISTRY}/frontend:${IMAGE_TAG} || true
+                """
+            }
+        }
+
+    }  // ✅ closes stages
 
     post {
         success {
@@ -113,4 +122,5 @@ stage('Checkout Code') {
             echo "❌ Deployment Failed – Investigate Immediately"
         }
     }
-}
+
+}  // ✅ closes pipeline
