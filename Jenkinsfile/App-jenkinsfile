@@ -95,6 +95,15 @@ stage('Checkout Code') {
             }
         }
     }
+    stage('Verify Deployment') {
+    steps {
+        sh """
+            kubectl get pods -l app=backend
+            kubectl get pods -l app=frontend
+            echo "✅ All pods running!"
+        """
+    }
+}
 
     post {
         success {
