@@ -3,7 +3,7 @@ pipeline {
     agent {
         docker {
             image 'lokeshkanneboina7/devops-agent:latest'
-            args '--entrypoint="" -v /var/run/docker.sock:/var/run/docker.sock'
+            args '--entrypoint= -v /var/run/docker.sock:/var/run/docker.sock'
         }
     }
 
@@ -84,9 +84,8 @@ pipeline {
                     sh """
                         aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                        echo "🚀 Applying core Kubernetes resources..."
+                        echo "🚀 Applying Kubernetes resources..."
 
-                        # Apply all YAML except ServiceMonitor
                         for file in K8s/*.yaml; do
                             if [[ "\$file" != *servicemonitor.yaml ]]; then
                                 echo "Applying \$file"
@@ -94,45 +93,55 @@ pipeline {
                             fi
                         done
 
-                        echo "⏳ Waiting for cluster stability..."
+                        echo "⏳ Waiting for cluster..."
                         sleep 20
 
-                        echo "🔍 Checking ServiceMonitor CRD..."
                         if kubectl get crd servicemonitors.monitoring.coreos.com >/dev/null 2>&1; then
-                            echo "✅ CRD exists → applying ServiceMonitor"
+                            echo "✅ Applying ServiceMonitor"
                             kubectl apply -f K8s/backend-servicemonitor.yaml
                         else
-                            echo "⚠️ CRD NOT found → skipping ServiceMonitor"
+                            echo "⚠️ Skipping ServiceMonitor"
                         fi
 
-                        echo "🚀 Waiting for rollout..."
-                        kubectl rollout status deployment/backend --timeout=180s
-                        kubectl rollout status deployment/frontend --timeout=180s
+                        echo "🚀 Rolling out..."
+
+                        kubectl rollout status deployment/backend --timeout=180s || (
+                            echo "❌ Backend failed"
+                            kubectl describe pod -l app=backend
+                            kubectl logs -l app=backend
+                            exit 1
+                        )
+
+                        kubectl rollout status deployment/frontend --timeout=180s || (
+                            echo "❌ Frontend failed"
+                            kubectl describe pod -l app=frontend
+                            kubectl logs -l app=frontend
+                            exit 1
+                        )
                     """
                 }
             }
         }
 
-     stage('Verify Deployment') {
-    steps {
-        withCredentials([[
-            $class: 'AmazonWebServicesCredentialsBinding',
-            credentialsId: 'aws-creds'
-        ]]) {
-            sh """
-                aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+        stage('Verify Deployment') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+                    sh """
+                        aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                echo "🔍 Verifying pods..."
+                        echo "🔍 Verifying pods..."
 
-                kubectl get pods -l app=backend
-                kubectl get pods -l app=frontend
+                        kubectl get pods -l app=backend
+                        kubectl get pods -l app=frontend
 
-                echo "✅ Deployment Verified"
-            """
+                        echo "✅ Deployment Verified"
+                    """
+                }
+            }
         }
-    }
-}
-
 
         stage('Cleanup') {
             steps {
