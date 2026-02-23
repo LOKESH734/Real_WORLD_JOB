@@ -17,11 +17,31 @@ spec:
           image: mysql:8
           env:
             - name: MYSQL_ROOT_PASSWORD
-              value: root
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_ROOT_PASSWORD
             - name: MYSQL_DATABASE
-              value: realworld
+              value: Jobreal
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_PASSWORD
           ports:
             - containerPort: 3306
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: mysql-data
+          emptyDir: {}        # ✅ no PVC needed
+
 ---
 apiVersion: v1
 kind: Service
@@ -33,3 +53,14 @@ spec:
   ports:
     - port: 3306
       targetPort: 3306
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+type: Opaque
+stringData:
+  MYSQL_ROOT_PASSWORD: root
+  MYSQL_USER: appuser
+  MYSQL_PASSWORD: tiger
