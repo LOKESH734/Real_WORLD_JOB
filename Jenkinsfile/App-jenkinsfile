@@ -113,18 +113,26 @@ pipeline {
             }
         }
 
-        stage('Verify Deployment') {
-            steps {
-                sh """
-                    echo "🔍 Verifying pods..."
+     stage('Verify Deployment') {
+    steps {
+        withCredentials([[
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: 'aws-creds'
+        ]]) {
+            sh """
+                aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                    kubectl get pods -l app=backend
-                    kubectl get pods -l app=frontend
+                echo "🔍 Verifying pods..."
 
-                    echo "✅ Deployment Verified"
-                """
-            }
+                kubectl get pods -l app=backend
+                kubectl get pods -l app=frontend
+
+                echo "✅ Deployment Verified"
+            """
         }
+    }
+}
+
 
         stage('Cleanup') {
             steps {
