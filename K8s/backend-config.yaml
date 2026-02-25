@@ -2,7 +2,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: backend-config
+  namespace: default
 data:
-  DB_URL: jdbc:mysql://mysql-service:3306/Jobreal?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+  DB_URL: "jdbc:mysql://mysql-service:3306/Jobreal?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
   MAIL_HOST: smtp.gmail.com
   MAIL_PORT: "587"
+  SPRING_PROFILES_ACTIVE: "prod"

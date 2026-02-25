@@ -3,17 +3,27 @@ package org.spring1.realwordjob.security;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
 import org.springframework.http.HttpMethod;
+
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.List;
 
 @Configuration
 @EnableWebSecurity
@@ -27,19 +37,21 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
 
         http
+            // ❌ Disable CSRF (for APIs)
             .csrf(csrf -> csrf.disable())
 
-            .cors(cors -> {}) // Enable CORS
+            // ✅ FIXED CORS CONFIG
+            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
 
             .authorizeHttpRequests(auth -> auth
 
-                // ✅ Allow preflight CORS
+                // ✅ Allow preflight requests
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                // ✅ Allow Actuator for Kubernetes probes
+                // ✅ Kubernetes health checks
                 .requestMatchers("/actuator/**").permitAll()
 
-                // ✅ Swagger OpenAPI
+                // ✅ Swagger
                 .requestMatchers(
                         "/v3/api-docs/**",
                         "/swagger-ui/**",
@@ -48,31 +60,59 @@ public class SecurityConfig {
                         "/webjars/**"
                 ).permitAll()
 
-                // ✅ Public Auth APIs
+                // ✅ Public APIs
                 .requestMatchers("/auth/**").permitAll()
 
-                // 🔒 Everything else secured
+                // 🔒 Secure all others
                 .anyRequest().authenticated()
             )
 
+            // ✅ Stateless JWT auth
             .sessionManagement(session ->
                 session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             );
 
-        // 🔐 Add JWT filter before UsernamePasswordAuthenticationFilter
+        // 🔐 Add JWT filter
         http.addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
 
+    // ✅ Authentication Manager
     @Bean
     public AuthenticationManager authenticationManager(
             AuthenticationConfiguration config) throws Exception {
         return config.getAuthenticationManager();
     }
 
+    // ✅ Password Encoder
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
+    }
+
+    // 🔥🔥🔥 MAIN FIX (CORS CONFIG)
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+
+        CorsConfiguration config = new CorsConfiguration();
+
+        config.setAllowCredentials(true);
+
+        // ⚠️ For testing (allow all)
+        config.setAllowedOrigins(List.of("*"));
+
+        config.setAllowedHeaders(List.of("*"));
+
+        config.setAllowedMethods(
+                List.of("GET", "POST", "PUT", "DELETE", "OPTIONS")
+        );
+
+        UrlBasedCorsConfigurationSource source =
+                new UrlBasedCorsConfigurationSource();
+
+        source.registerCorsConfiguration("/**", config);
+
+        return source;
     }
 }
