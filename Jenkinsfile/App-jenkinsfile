@@ -11,8 +11,8 @@ pipeline {
         AWS_REGION   = "ap-south-2"
         ACCOUNT_ID   = "846345203699"
         CLUSTER_NAME = "realworld-eks"
-        ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
         NODEGROUP    = "default-20260226065836776100000011"
+        ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
     }
 
     stages {
@@ -80,6 +80,7 @@ pipeline {
             }
         }
 
+        // ✅ IMPORTANT: Auto-scale cluster before deploy
         stage('Ensure Cluster Capacity') {
             steps {
                 withCredentials([[
@@ -95,9 +96,9 @@ pipeline {
                           --cluster-name ${CLUSTER_NAME} \
                           --nodegroup-name ${NODEGROUP} \
                           --scaling-config minSize=1,maxSize=3,desiredSize=2 \
-                          --region ${AWS_REGION} || true
+                          --region ${AWS_REGION}
 
-                        echo "⏳ Waiting for nodes..."
+                        echo "⏳ Waiting for nodes to be ready..."
                         sleep 60
                     '''
                 }
@@ -124,8 +125,8 @@ pipeline {
 
                         echo "⏳ Waiting for rollout..."
 
-                        kubectl rollout status deployment/backend --timeout=180s || exit 1
-                        kubectl rollout status deployment/frontend --timeout=180s || exit 1
+                        kubectl rollout status deployment/backend --timeout=300s
+                        kubectl rollout status deployment/frontend --timeout=300s
                     '''
                 }
             }
@@ -133,34 +134,60 @@ pipeline {
 
         stage('Verify Deployment') {
             steps {
-                sh '''
-                    set -e
-                    kubectl get pods -o wide
-                    kubectl get svc
-                '''
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+                    sh '''
+                        set -e
+
+                        aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+
+                        echo "🔍 Pods:"
+                        kubectl get pods -o wide
+
+                        echo "🌐 Services:"
+                        kubectl get svc
+
+                        echo "📦 Deployments:"
+                        kubectl get deployments
+                    '''
+                }
             }
         }
 
         stage('Get Application URL') {
             steps {
-                sh '''
-                    set -e
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+                    sh '''
+                        set -e
 
-                    echo "⏳ Waiting for Ingress..."
+                        aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                    for i in {1..30}; do
-                        INGRESS_URL=$(kubectl get ingress -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}')
-                        if [ ! -z "$INGRESS_URL" ]; then
-                            echo "✅ URL Ready"
-                            echo "http://$INGRESS_URL"
-                            exit 0
-                        fi
-                        sleep 10
-                    done
+                        echo "⏳ Waiting for Ingress URL..."
 
-                    echo "❌ Ingress not ready"
-                    exit 1
-                '''
+                        for i in {1..30}; do
+                            INGRESS_URL=$(kubectl get ingress -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}')
+                            
+                            if [ ! -z "$INGRESS_URL" ]; then
+                                echo "======================================="
+                                echo "🚀 APPLICATION LIVE:"
+                                echo "http://$INGRESS_URL"
+                                echo "======================================="
+                                exit 0
+                            fi
+
+                            echo "Waiting... ($i/30)"
+                            sleep 10
+                        done
+
+                        echo "❌ Ingress not ready"
+                        exit 1
+                    '''
+                }
             }
         }
 
@@ -175,19 +202,33 @@ pipeline {
     }
 
     post {
-        failure {
-            echo "❌ Deployment Failed - Debugging..."
-
-            sh '''
-                kubectl get pods
-                kubectl describe pods
-                kubectl logs -l app=backend || true
-                kubectl logs -l app=frontend || true
-            '''
-        }
 
         success {
-            echo "🚀 CI/CD SUCCESS – App Live"
+            echo "🚀 CI/CD SUCCESS – FULLY AUTOMATED DEPLOYMENT DONE"
+        }
+
+        failure {
+            echo "❌ Deployment Failed – Debugging..."
+
+            withCredentials([[
+                $class: 'AmazonWebServicesCredentialsBinding',
+                credentialsId: 'aws-creds'
+            ]]) {
+                sh '''
+                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+
+                    echo "🔍 Debugging Info"
+
+                    kubectl get pods
+                    kubectl describe pods
+
+                    echo "📜 Backend Logs:"
+                    kubectl logs -l app=backend || true
+
+                    echo "📜 Frontend Logs:"
+                    kubectl logs -l app=frontend || true
+                '''
+            }
         }
     }
 }
