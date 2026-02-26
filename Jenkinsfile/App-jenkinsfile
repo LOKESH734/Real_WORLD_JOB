@@ -12,6 +12,7 @@ pipeline {
         ACCOUNT_ID   = "846345203699"
         CLUSTER_NAME = "realworld-eks"
         ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        NODEGROUP    = "default-20260226065836776100000011"
     }
 
     stages {
@@ -79,6 +80,30 @@ pipeline {
             }
         }
 
+        stage('Ensure Cluster Capacity') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+                    sh '''
+                        set -e
+
+                        echo "📈 Scaling EKS Nodegroup..."
+
+                        aws eks update-nodegroup-config \
+                          --cluster-name ${CLUSTER_NAME} \
+                          --nodegroup-name ${NODEGROUP} \
+                          --scaling-config minSize=1,maxSize=3,desiredSize=2 \
+                          --region ${AWS_REGION} || true
+
+                        echo "⏳ Waiting for nodes..."
+                        sleep 60
+                    '''
+                }
+            }
+        }
+
         stage('Deploy to EKS') {
             steps {
                 withCredentials([[
@@ -99,8 +124,8 @@ pipeline {
 
                         echo "⏳ Waiting for rollout..."
 
-                        kubectl rollout status deployment/backend --timeout=180s
-                        kubectl rollout status deployment/frontend --timeout=180s
+                        kubectl rollout status deployment/backend --timeout=180s || exit 1
+                        kubectl rollout status deployment/frontend --timeout=180s || exit 1
                     '''
                 }
             }
@@ -110,10 +135,7 @@ pipeline {
             steps {
                 sh '''
                     set -e
-                    echo "🔍 Pods status:"
                     kubectl get pods -o wide
-
-                    echo "🌐 Services:"
                     kubectl get svc
                 '''
             }
@@ -124,22 +146,20 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "⏳ Waiting for Ingress URL..."
+                    echo "⏳ Waiting for Ingress..."
 
-                    for i in {1..20}; do
+                    for i in {1..30}; do
                         INGRESS_URL=$(kubectl get ingress -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}')
                         if [ ! -z "$INGRESS_URL" ]; then
-                            echo "✅ Found Ingress"
-                            break
+                            echo "✅ URL Ready"
+                            echo "http://$INGRESS_URL"
+                            exit 0
                         fi
-                        echo "Waiting... attempt $i"
                         sleep 10
                     done
 
-                    echo "======================================="
-                    echo "🚀 APPLICATION URL:"
-                    echo "http://$INGRESS_URL"
-                    echo "======================================="
+                    echo "❌ Ingress not ready"
+                    exit 1
                 '''
             }
         }
@@ -155,11 +175,19 @@ pipeline {
     }
 
     post {
-        success {
-            echo "🚀 CI/CD SUCCESS – App Deployed Successfully"
-        }
         failure {
-            echo "❌ Deployment Failed – Check Logs Immediately"
+            echo "❌ Deployment Failed - Debugging..."
+
+            sh '''
+                kubectl get pods
+                kubectl describe pods
+                kubectl logs -l app=backend || true
+                kubectl logs -l app=frontend || true
+            '''
+        }
+
+        success {
+            echo "🚀 CI/CD SUCCESS – App Live"
         }
     }
 }
