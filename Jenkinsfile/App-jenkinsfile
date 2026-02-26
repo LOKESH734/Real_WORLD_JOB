@@ -85,26 +85,16 @@ pipeline {
                         aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
                         echo "🚀 Applying Kubernetes resources..."
+                        kubectl apply -f K8s/
 
-                        for file in K8s/*.yaml; do
-                            if [[ "\$file" != *servicemonitor.yaml ]]; then
-                                echo "Applying \$file"
-                                kubectl apply -f \$file
-                            fi
-                        done
+                        echo "🔄 Updating images with new tag..."
+                        kubectl set image deployment/backend backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
+                        kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
 
-                        echo "⏳ Waiting for cluster..."
+                        echo "⏳ Waiting for rollout..."
                         sleep 20
 
-                        if kubectl get crd servicemonitors.monitoring.coreos.com >/dev/null 2>&1; then
-                            echo "✅ Applying ServiceMonitor"
-                            kubectl apply -f K8s/backend-servicemonitor.yaml
-                        else
-                            echo "⚠️ Skipping ServiceMonitor"
-                        fi
-
-                        echo "🚀 Rolling out..."
-
+                        echo "🚀 Checking backend rollout..."
                         kubectl rollout status deployment/backend --timeout=180s || (
                             echo "❌ Backend failed"
                             kubectl describe pod -l app=backend
@@ -112,6 +102,7 @@ pipeline {
                             exit 1
                         )
 
+                        echo "🚀 Checking frontend rollout..."
                         kubectl rollout status deployment/frontend --timeout=180s || (
                             echo "❌ Frontend failed"
                             kubectl describe pod -l app=frontend
@@ -133,9 +124,11 @@ pipeline {
                         aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
                         echo "🔍 Verifying pods..."
-
                         kubectl get pods -l app=backend
                         kubectl get pods -l app=frontend
+
+                        echo "🌐 Services:"
+                        kubectl get svc
 
                         echo "✅ Deployment Verified"
                     """

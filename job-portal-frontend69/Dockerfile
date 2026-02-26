@@ -4,16 +4,18 @@ WORKDIR /app
 
 # Copy dependency files first (cache friendly)
 COPY package.json package-lock.json ./
-
 RUN npm ci
 
 # Copy source code
 COPY . .
 
+# Accept build argument and set as env var for React build
+ARG REACT_APP_API_URL
+ENV REACT_APP_API_URL=$REACT_APP_API_URL
+
 # Build CRA app (outputs to /build)
 RUN npm run build && \
     test -d build
-
 
 # -------- Runtime stage --------
 FROM nginx:1.25

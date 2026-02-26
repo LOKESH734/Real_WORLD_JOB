@@ -7,7 +7,7 @@ metadata:
     app: backend
     tier: api
 spec:
-  replicas: 2
+  replicas: 1
   progressDeadlineSeconds: 600
   revisionHistoryLimit: 3
   strategy:
@@ -47,7 +47,7 @@ spec:
             httpGet:
               path: /actuator/health
               port: 8086
-            initialDelaySeconds: 30
+            initialDelaySeconds: 70
             periodSeconds: 10
             failureThreshold: 30
             timeoutSeconds: 3
@@ -55,7 +55,7 @@ spec:
             httpGet:
               path: /actuator/health/readiness
               port: 8086
-            initialDelaySeconds: 5
+            initialDelaySeconds: 40
             periodSeconds: 10
             failureThreshold: 3
             timeoutSeconds: 3
@@ -63,7 +63,7 @@ spec:
             httpGet:
               path: /actuator/health/liveness
               port: 8086
-            initialDelaySeconds: 5
+            initialDelaySeconds: 50
             periodSeconds: 20
             failureThreshold: 3
             timeoutSeconds: 3

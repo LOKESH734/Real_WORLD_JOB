@@ -37,21 +37,11 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
 
         http
-            // ❌ Disable CSRF (for APIs)
             .csrf(csrf -> csrf.disable())
-
-            // ✅ FIXED CORS CONFIG
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-
             .authorizeHttpRequests(auth -> auth
-
-                // ✅ Allow preflight requests
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-
-                // ✅ Kubernetes health checks
                 .requestMatchers("/actuator/**").permitAll()
-
-                // ✅ Swagger
                 .requestMatchers(
                         "/v3/api-docs/**",
                         "/swagger-ui/**",
@@ -59,54 +49,56 @@ public class SecurityConfig {
                         "/swagger-resources/**",
                         "/webjars/**"
                 ).permitAll()
-
-                // ✅ Public APIs
                 .requestMatchers("/auth/**").permitAll()
-
-                // 🔒 Secure all others
+                .requestMatchers("/register", "/login").permitAll()  // ✅ added
                 .anyRequest().authenticated()
             )
-
-            // ✅ Stateless JWT auth
             .sessionManagement(session ->
                 session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             );
 
-        // 🔐 Add JWT filter
         http.addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
 
-    // ✅ Authentication Manager
     @Bean
     public AuthenticationManager authenticationManager(
             AuthenticationConfiguration config) throws Exception {
         return config.getAuthenticationManager();
     }
 
-    // ✅ Password Encoder
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
-    // 🔥🔥🔥 MAIN FIX (CORS CONFIG)
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
 
         CorsConfiguration config = new CorsConfiguration();
 
+        // ✅ FIX: Cannot use allowCredentials(true) with allowedOrigins("*")
+        // Use allowedOriginPatterns("*") instead
+        config.setAllowedOriginPatterns(List.of("*"));
+
         config.setAllowCredentials(true);
 
-        // ⚠️ For testing (allow all)
-        config.setAllowedOrigins(List.of("*"));
-
-        config.setAllowedHeaders(List.of("*"));
+        config.setAllowedHeaders(List.of(
+                "Authorization",
+                "Content-Type",
+                "Accept",
+                "Origin",
+                "X-Requested-With"
+        ));
 
         config.setAllowedMethods(
-                List.of("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
         );
+
+        config.setExposedHeaders(List.of("Authorization"));
+
+        config.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source =
                 new UrlBasedCorsConfigurationSource();
