@@ -48,12 +48,92 @@ pipeline {
             }
         }
 
+        // ✅ IMPORTANT: Auto-scale cluster BEFORE build so URL is available
+        stage('Ensure Cluster Capacity') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+                    sh '''
+                        set -e
+
+                        echo "📈 Scaling EKS Nodegroup..."
+
+                        aws eks update-nodegroup-config \
+                          --cluster-name ${CLUSTER_NAME} \
+                          --nodegroup-name ${NODEGROUP} \
+                          --scaling-config minSize=1,maxSize=3,desiredSize=2 \
+                          --region ${AWS_REGION}
+
+                        echo "⏳ Waiting for nodes to be ready..."
+                        sleep 60
+
+                        aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+
+                        echo "⏳ Waiting for all nodes to be Ready..."
+                        kubectl wait --for=condition=Ready nodes --all --timeout=120s || true
+                    '''
+                }
+            }
+        }
+
+        stage('Get Ingress URL') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+                    script {
+                        sh 'aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}'
+
+                        // Get existing ingress URL if already deployed
+                        def ingressUrl = sh(
+                            script: "kubectl get ingress app-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo ''",
+                            returnStdout: true
+                        ).trim()
+
+                        if (ingressUrl) {
+                            env.REACT_APP_API_URL = "http://${ingressUrl}"
+                            echo "✅ Using existing Ingress URL: ${env.REACT_APP_API_URL}"
+                        } else {
+                            // Apply ingress first to get URL, then build frontend
+                            sh 'kubectl apply -f K8s/ingress.yaml || true'
+                            echo "⏳ Waiting for ALB to be provisioned..."
+                            sh '''
+                                for i in $(seq 1 20); do
+                                    URL=$(kubectl get ingress app-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+                                    if [ ! -z "$URL" ]; then
+                                        echo "GOT_URL=$URL"
+                                        break
+                                    fi
+                                    echo "Waiting... ($i/20)"
+                                    sleep 15
+                                done
+                            '''
+                            ingressUrl = sh(
+                                script: "kubectl get ingress app-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'",
+                                returnStdout: true
+                            ).trim()
+                            env.REACT_APP_API_URL = "http://${ingressUrl}"
+                            echo "✅ Got new Ingress URL: ${env.REACT_APP_API_URL}"
+                        }
+                    }
+                }
+            }
+        }
+
         stage('Build Docker Images') {
             steps {
                 sh '''
                     set -e
+                    echo "🔨 Building backend..."
                     docker build -t backend:${IMAGE_TAG} realWordJob
-                    docker build -t frontend:${IMAGE_TAG} job-portal-frontend69
+
+                    echo "🔨 Building frontend with API URL: ${REACT_APP_API_URL}"
+                    docker build \
+                      --build-arg REACT_APP_API_URL=${REACT_APP_API_URL} \
+                      -t frontend:${IMAGE_TAG} job-portal-frontend69
                 '''
             }
         }
@@ -80,31 +160,6 @@ pipeline {
             }
         }
 
-        // ✅ IMPORTANT: Auto-scale cluster before deploy
-        stage('Ensure Cluster Capacity') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-                    sh '''
-                        set -e
-
-                        echo "📈 Scaling EKS Nodegroup..."
-
-                        aws eks update-nodegroup-config \
-                          --cluster-name ${CLUSTER_NAME} \
-                          --nodegroup-name ${NODEGROUP} \
-                          --scaling-config minSize=1,maxSize=3,desiredSize=2 \
-                          --region ${AWS_REGION}
-
-                        echo "⏳ Waiting for nodes to be ready..."
-                        sleep 60
-                    '''
-                }
-            }
-        }
-
         stage('Deploy to EKS') {
             steps {
                 withCredentials([[
@@ -124,7 +179,6 @@ pipeline {
                         kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
 
                         echo "⏳ Waiting for rollout..."
-
                         kubectl rollout status deployment/backend --timeout=300s
                         kubectl rollout status deployment/frontend --timeout=300s
                     '''
@@ -151,6 +205,9 @@ pipeline {
 
                         echo "📦 Deployments:"
                         kubectl get deployments
+
+                        echo "🌐 Ingress:"
+                        kubectl get ingress
                     '''
                 }
             }
@@ -169,9 +226,9 @@ pipeline {
 
                         echo "⏳ Waiting for Ingress URL..."
 
-                        for i in {1..30}; do
+                        for i in $(seq 1 30); do
                             INGRESS_URL=$(kubectl get ingress -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}')
-                            
+
                             if [ ! -z "$INGRESS_URL" ]; then
                                 echo "======================================="
                                 echo "🚀 APPLICATION LIVE:"
@@ -208,27 +265,25 @@ pipeline {
         }
 
         failure {
-            echo "❌ Deployment Failed – Debugging..."
-
             withCredentials([[
                 $class: 'AmazonWebServicesCredentialsBinding',
                 credentialsId: 'aws-creds'
             ]]) {
                 sh '''
-                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME} || true
 
                     echo "🔍 Debugging Info"
-
-                    kubectl get pods
-                    kubectl describe pods
+                    kubectl get pods || true
+                    kubectl describe pods || true
 
                     echo "📜 Backend Logs:"
-                    kubectl logs -l app=backend || true
+                    kubectl logs -l app=backend --tail=50 || true
 
                     echo "📜 Frontend Logs:"
-                    kubectl logs -l app=frontend || true
+                    kubectl logs -l app=frontend --tail=50 || true
                 '''
             }
+            echo "❌ Deployment Failed – Check logs above"
         }
     }
 }
