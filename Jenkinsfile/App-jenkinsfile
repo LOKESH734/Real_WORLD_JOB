@@ -47,7 +47,6 @@ pipeline {
             }
         }
 
-        // ✅ IMPORTANT: Auto-scale cluster BEFORE build so URL is available
         stage('Ensure Cluster Capacity') {
             steps {
                 withCredentials([[
@@ -83,7 +82,7 @@ pipeline {
             }
         }
 
-        stage('Get Ingress URL') {
+        stage('Get or Create Ingress URL') {
             steps {
                 withCredentials([[
                     $class: 'AmazonWebServicesCredentialsBinding',
@@ -92,36 +91,46 @@ pipeline {
                     script {
                         sh 'aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}'
 
-                        // Get existing ingress URL if already deployed
+                        // Check for existing ingress URL
                         def ingressUrl = sh(
                             script: "kubectl get ingress app-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo ''",
                             returnStdout: true
                         ).trim()
 
-                        if (ingressUrl) {
+                        if (ingressUrl && ingressUrl != '') {
                             env.REACT_APP_API_URL = "http://${ingressUrl}"
                             echo "✅ Using existing Ingress URL: ${env.REACT_APP_API_URL}"
                         } else {
-                            // Apply ingress first to get URL, then build frontend
+                            // Apply ingress to provision ALB
                             sh 'kubectl apply -f K8s/ingress.yaml || true'
-                            echo "⏳ Waiting for ALB to be provisioned..."
+                            echo "⏳ Waiting up to 10 minutes for ALB to be provisioned..."
+
+                            // Wait longer - ALB provisioning can take 3-5 minutes
                             sh '''
-                                for i in $(seq 1 20); do
-                                    URL=$(kubectl get ingress app-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
-                                    if [ ! -z "$URL" ]; then
+                                for i in $(seq 1 40); do
+                                    URL=$(kubectl get ingress app-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+                                    if [ -n "$URL" ]; then
                                         echo "GOT_URL=$URL"
                                         break
                                     fi
-                                    echo "Waiting... ($i/20)"
+                                    echo "Waiting for ALB... ($i/40)"
                                     sleep 15
                                 done
                             '''
+
                             ingressUrl = sh(
-                                script: "kubectl get ingress app-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'",
+                                script: "kubectl get ingress app-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo ''",
                                 returnStdout: true
                             ).trim()
-                            env.REACT_APP_API_URL = "http://${ingressUrl}"
-                            echo "✅ Got new Ingress URL: ${env.REACT_APP_API_URL}"
+
+                            if (ingressUrl && ingressUrl != '') {
+                                env.REACT_APP_API_URL = "http://${ingressUrl}"
+                                echo "✅ Got new Ingress URL: ${env.REACT_APP_API_URL}"
+                            } else {
+                                // ALB not ready yet - use a placeholder and warn
+                                // This can happen if AWS Load Balancer Controller is not installed
+                                error("❌ ALB Ingress URL not available after 10 minutes. Ensure AWS Load Balancer Controller is installed on the cluster:\n  helm repo add eks https://aws.github.io/eks-charts\n  helm install aws-load-balancer-controller eks/aws-load-balancer-controller -n kube-system --set clusterName=${CLUSTER_NAME}")
+                            }
                         }
                     }
                 }
@@ -176,10 +185,21 @@ pipeline {
 
                         aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                        echo "🚀 Applying Kubernetes manifests..."
-                        kubectl apply -f K8s/
+                        echo "🚀 Applying core Kubernetes manifests (excluding ServiceMonitor)..."
+                        # Apply all manifests except ServiceMonitor to avoid CRD errors
+                        for f in K8s/*.yaml; do
+                            case "$f" in
+                                *servicemonitor*) echo "⏭️  Skipping $f (applying separately)" ;;
+                                *) kubectl apply -f "$f" || true ;;
+                            esac
+                        done
 
-                        echo "🔄 Updating images..."
+                        echo "📊 Applying ServiceMonitor (skipped if Prometheus CRD not installed)..."
+                        kubectl apply -f K8s/backend-servicemonitor.yaml 2>/dev/null \
+                            && echo "✅ ServiceMonitor applied" \
+                            || echo "⚠️  ServiceMonitor skipped - Prometheus Operator CRD not found (install prometheus-operator to enable)"
+
+                        echo "🔄 Updating images to tag: ${IMAGE_TAG}"
                         kubectl set image deployment/backend backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
                         kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
 
@@ -232,9 +252,9 @@ pipeline {
                         echo "⏳ Waiting for Ingress URL..."
 
                         for i in $(seq 1 30); do
-                            INGRESS_URL=$(kubectl get ingress -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}')
+                            INGRESS_URL=$(kubectl get ingress app-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
 
-                            if [ ! -z "$INGRESS_URL" ]; then
+                            if [ -n "$INGRESS_URL" ]; then
                                 echo "======================================="
                                 echo "🚀 APPLICATION LIVE:"
                                 echo "http://$INGRESS_URL"
@@ -246,7 +266,7 @@ pipeline {
                             sleep 10
                         done
 
-                        echo "❌ Ingress not ready"
+                        echo "❌ Ingress not ready after 5 minutes"
                         exit 1
                     '''
                 }
@@ -278,7 +298,7 @@ pipeline {
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME} || true
 
                     echo "🔍 Debugging Info"
-                    kubectl get pods || true
+                    kubectl get pods -o wide || true
                     kubectl describe pods || true
 
                     echo "📜 Backend Logs:"
@@ -286,6 +306,12 @@ pipeline {
 
                     echo "📜 Frontend Logs:"
                     kubectl logs -l app=frontend --tail=50 || true
+
+                    echo "📜 MySQL Logs:"
+                    kubectl logs -l app=mysql --tail=30 || true
+
+                    echo "📦 PVC Status:"
+                    kubectl get pvc || true
                 '''
             }
             echo "❌ Deployment Failed – Check logs above"

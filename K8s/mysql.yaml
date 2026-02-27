@@ -10,19 +10,6 @@ stringData:
   MYSQL_PASSWORD: tiger
 ---
 apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: mysql-pv
-spec:
-  capacity:
-    storage: 10Gi
-  accessModes:
-    - ReadWriteOnce
-  persistentVolumeReclaimPolicy: Retain
-  hostPath:
-    path: /tmp/mysql-data
----
-apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: mysql-pvc
@@ -30,8 +17,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: ""
-  volumeName: mysql-pv
+  storageClassName: gp3
   resources:
     requests:
       storage: 10Gi
