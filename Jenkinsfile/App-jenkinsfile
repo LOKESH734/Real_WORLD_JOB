@@ -11,7 +11,6 @@ pipeline {
         AWS_REGION   = "ap-south-2"
         ACCOUNT_ID   = "846345203699"
         CLUSTER_NAME = "realworld-eks"
-        NODEGROUP    = "default-20260226065836776100000011"
         ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
     }
 
@@ -58,8 +57,11 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "📈 Scaling EKS Nodegroup..."
+                        echo "🔍 Getting nodegroup name dynamically..."
+                        NODEGROUP=$(aws eks list-nodegroups --cluster-name ${CLUSTER_NAME} --region ${AWS_REGION} --query 'nodegroups[0]' --output text)
+                        echo "📦 Nodegroup: $NODEGROUP"
 
+                        echo "📈 Scaling EKS Nodegroup..."
                         aws eks update-nodegroup-config \
                           --cluster-name ${CLUSTER_NAME} \
                           --nodegroup-name ${NODEGROUP} \
@@ -67,12 +69,15 @@ pipeline {
                           --region ${AWS_REGION}
 
                         echo "⏳ Waiting for nodes to be ready..."
-                        sleep 60
+                        sleep 90
 
                         aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
                         echo "⏳ Waiting for all nodes to be Ready..."
-                        kubectl wait --for=condition=Ready nodes --all --timeout=120s || true
+                        kubectl wait --for=condition=Ready nodes --all --timeout=180s || true
+
+                        echo "✅ Nodes status:"
+                        kubectl get nodes
                     '''
                 }
             }
