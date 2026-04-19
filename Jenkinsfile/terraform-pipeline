@@ -2,7 +2,7 @@ pipeline {
     agent {
         docker {
             image 'lokeshkanneboina7/devops-agent:latest'
-            args '-v /var/run/docker.sock:/var/run/docker.sock'
+            args '--entrypoint= -v /var/run/docker.sock:/var/run/docker.sock'
         }
     }
 
