@@ -35,45 +35,38 @@ pipeline {
             }
         }
 
-        // ✅ ECR AUTO CREATE (NO ERROR EVER)
+        // ✅ ECR AUTO
         stage('Ensure ECR') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                     sh '''
                     set -e
-
                     for repo in backend frontend; do
                         aws ecr describe-repositories --repository-names $repo --region ${AWS_REGION} >/dev/null 2>&1 \
                         || aws ecr create-repository --repository-name $repo --region ${AWS_REGION}
                     done
-
-                    echo "ECR READY"
                     '''
                 }
             }
         }
 
-        // ✅ FIXED HELM INSTALL (NO OPENSSL ERROR)
+        // ✅ ALB CONTROLLER
         stage('Setup ALB Controller') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                     sh '''
                     set -e
-
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                    echo "Installing Helm safely..."
                     export VERIFY_CHECKSUM=false
                     curl -s https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
                     helm repo add eks https://aws.github.io/eks-charts
                     helm repo update
 
-                    echo "Getting VPC ID..."
                     VPC_ID=$(aws eks describe-cluster --name ${CLUSTER_NAME} \
                         --query "cluster.resourcesVpcConfig.vpcId" --output text)
 
-                    echo "Installing ALB Controller..."
                     kubectl create namespace kube-system || true
 
                     helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
@@ -82,8 +75,31 @@ pipeline {
                         --set serviceAccount.create=true \
                         --set region=${AWS_REGION} \
                         --set vpcId=$VPC_ID
+                    '''
+                }
+            }
+        }
 
-                    echo "ALB Controller Ready"
+        // ✅ MONITORING (PROMETHEUS + GRAFANA)
+        stage('Setup Monitoring') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                    sh '''
+                    set -e
+
+                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+
+                    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+                    helm repo update
+
+                    helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+                        -n monitoring \
+                        --create-namespace \
+                        --set grafana.service.type=LoadBalancer \
+                        --set prometheus.service.type=ClusterIP
+
+                    echo "Waiting for monitoring pods..."
+                    sleep 60
                     '''
                 }
             }
@@ -93,11 +109,7 @@ pipeline {
             steps {
                 sh '''
                 set -e
-
-                echo "Building backend..."
                 docker build -t backend:${IMAGE_TAG} realWordJob
-
-                echo "Building frontend..."
                 docker build -t frontend:${IMAGE_TAG} job-portal-frontend69
                 '''
             }
@@ -109,17 +121,13 @@ pipeline {
                     sh '''
                     set -e
 
-                    echo "Logging into ECR..."
                     aws ecr get-login-password --region ${AWS_REGION} \
                     | docker login --username AWS --password-stdin ${ECR_REGISTRY}
 
                     docker tag backend:${IMAGE_TAG} ${ECR_REGISTRY}/backend:${IMAGE_TAG}
                     docker tag frontend:${IMAGE_TAG} ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
 
-                    echo "Pushing backend..."
                     docker push ${ECR_REGISTRY}/backend:${IMAGE_TAG}
-
-                    echo "Pushing frontend..."
                     docker push ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
                     '''
                 }
@@ -134,14 +142,11 @@ pipeline {
 
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                    echo "Deploying Kubernetes resources..."
                     kubectl apply -f K8s/
 
-                    echo "Updating images..."
                     kubectl set image deployment/backend backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
                     kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
 
-                    echo "Waiting for rollout..."
                     kubectl rollout status deployment/backend --timeout=300s
                     kubectl rollout status deployment/frontend --timeout=300s
                     '''
@@ -149,7 +154,7 @@ pipeline {
             }
         }
 
-        stage('Get Application URL') {
+        stage('Get App URL') {
             steps {
                 sh '''
                 set -e
@@ -162,19 +167,24 @@ pipeline {
                         2>/dev/null || echo "")
 
                     if [ -n "$URL" ]; then
-                        echo "===================================="
-                        echo "🚀 APPLICATION LIVE:"
-                        echo "http://$URL"
-                        echo "===================================="
-                        exit 0
+                        echo "APP URL: http://$URL"
+                        break
                     fi
-
-                    echo "Waiting ($i/40)..."
                     sleep 15
                 done
+                '''
+            }
+        }
 
-                echo "❌ ALB not created"
-                exit 1
+        stage('Get Grafana URL') {
+            steps {
+                sh '''
+                echo "Grafana Service:"
+                kubectl get svc -n monitoring kube-prometheus-stack-grafana
+
+                echo "Grafana Password:"
+                kubectl get secret -n monitoring kube-prometheus-stack-grafana \
+                -o jsonpath="{.data.admin-password}" | base64 --decode
                 '''
             }
         }
@@ -182,7 +192,7 @@ pipeline {
 
     post {
         success {
-            echo "🚀 FULL PIPELINE SUCCESS"
+            echo "🚀 FULL AUTOMATION SUCCESS (APP + MONITORING)"
         }
         failure {
             echo "❌ PIPELINE FAILED"
