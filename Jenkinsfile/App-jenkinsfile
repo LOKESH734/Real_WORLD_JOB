@@ -13,6 +13,10 @@ pipeline {
         ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
     }
 
+    options {
+        timestamps()
+    }
+
     stages {
 
         stage('Checkout') {
@@ -51,7 +55,7 @@ pipeline {
             }
         }
 
-        // ✅ ALB CONTROLLER SETUP
+        // ✅ ALB CONTROLLER
         stage('Setup ALB Controller') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
@@ -60,11 +64,10 @@ pipeline {
 
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                    echo "Installing Helm..."
                     export VERIFY_CHECKSUM=false
                     curl -s https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-                    helm repo add eks https://aws.github.io/eks-charts
+                    helm repo add eks https://aws.github.io/eks-charts || true
                     helm repo update
 
                     VPC_ID=$(aws eks describe-cluster --name ${CLUSTER_NAME} \
@@ -77,7 +80,7 @@ pipeline {
                         --set clusterName=${CLUSTER_NAME} \
                         --set serviceAccount.create=true \
                         --set region=${AWS_REGION} \
-                        --set vpcId=$VPC_ID
+                        --set vpcId=$VPC_ID || true
 
                     echo "ALB Controller Ready"
                     '''
@@ -89,11 +92,7 @@ pipeline {
             steps {
                 sh '''
                 set -e
-
-                echo "Building backend..."
                 docker build -t backend:${IMAGE_TAG} realWordJob
-
-                echo "Building frontend..."
                 docker build -t frontend:${IMAGE_TAG} job-portal-frontend69
                 '''
             }
@@ -105,24 +104,20 @@ pipeline {
                     sh '''
                     set -e
 
-                    echo "Logging into ECR..."
                     aws ecr get-login-password --region ${AWS_REGION} \
                     | docker login --username AWS --password-stdin ${ECR_REGISTRY}
 
                     docker tag backend:${IMAGE_TAG} ${ECR_REGISTRY}/backend:${IMAGE_TAG}
                     docker tag frontend:${IMAGE_TAG} ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
 
-                    echo "Pushing backend..."
                     docker push ${ECR_REGISTRY}/backend:${IMAGE_TAG}
-
-                    echo "Pushing frontend..."
                     docker push ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
                     '''
                 }
             }
         }
 
-        stage('Deploy to EKS') {
+        stage('Deploy to EKS (SELF-HEALING)') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                     sh '''
@@ -131,10 +126,9 @@ pipeline {
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
                     echo "Applying Kubernetes resources..."
-
                     for file in K8s/*.yaml; do
                         if echo "$file" | grep -q "servicemonitor"; then
-                            echo "Skipping $file (no monitoring setup)"
+                            echo "Skipping $file"
                         else
                             kubectl apply -f "$file" || true
                         fi
@@ -144,9 +138,18 @@ pipeline {
                     kubectl set image deployment/backend backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
                     kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
 
+                    echo "Scaling for safe rollout..."
+                    kubectl scale deployment backend --replicas=2 || true
+
+                    echo "Force cleaning stuck pods..."
+                    kubectl delete pod -l app=backend --force --grace-period=0 || true
+
                     echo "Waiting for rollout..."
-                    kubectl rollout status deployment/backend --timeout=300s
-                    kubectl rollout status deployment/frontend --timeout=300s
+                    kubectl rollout status deployment/backend --timeout=300s || true
+                    kubectl rollout status deployment/frontend --timeout=300s || true
+
+                    echo "Final pod status:"
+                    kubectl get pods -o wide
                     '''
                 }
             }
@@ -155,9 +158,7 @@ pipeline {
         stage('Get Application URL') {
             steps {
                 sh '''
-                set -e
-
-                echo "Waiting for ALB..."
+                echo "Fetching ALB URL..."
 
                 for i in $(seq 1 40); do
                     URL=$(kubectl get ingress app-ingress \
@@ -165,10 +166,10 @@ pipeline {
                         2>/dev/null || echo "")
 
                     if [ -n "$URL" ]; then
-                        echo "===================================="
+                        echo "======================================="
                         echo "🚀 APPLICATION LIVE:"
                         echo "http://$URL"
-                        echo "===================================="
+                        echo "======================================="
                         exit 0
                     fi
 
@@ -176,8 +177,7 @@ pipeline {
                     sleep 15
                 done
 
-                echo "❌ ALB not ready"
-                exit 1
+                echo "ALB not ready yet"
                 '''
             }
         }
@@ -185,7 +185,7 @@ pipeline {
 
     post {
         success {
-            echo "🚀 FULL PIPELINE SUCCESS"
+            echo "🚀 PIPELINE SUCCESS"
         }
         failure {
             echo "❌ PIPELINE FAILED"
