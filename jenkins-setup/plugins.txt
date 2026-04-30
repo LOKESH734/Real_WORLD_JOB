@@ -1,0 +1,9 @@
+docker-workflow
+docker-plugin
+git
+pipeline-stage-view
+aws-credentials
+kubernetes
+workflow-aggregator
+blueocean
+configuration-as-code

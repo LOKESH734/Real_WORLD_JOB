@@ -1,25 +1,26 @@
-FROM docker:24.0.7-cli
+FROM jenkins/jenkins:lts-jdk17
 
-# Install base tools
-RUN apk add --no-cache \
-    curl \
-    unzip \
-    bash \
-    git \
-    python3 \
-    py3-pip \
-    aws-cli
+USER root
 
-# Install Terraform
-RUN curl -LO https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip \
-    && unzip terraform_1.6.6_linux_amd64.zip \
-    && mv terraform /usr/local/bin/ \
-    && rm terraform_1.6.6_linux_amd64.zip
+# Install Docker CLI (not daemon — we bind the host socket)
+RUN apt-get update && apt-get install -y \
+    ca-certificates curl gnupg lsb-release && \
+    install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
+    chmod a+r /etc/apt/keyrings/docker.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) \
+        signed-by=/etc/apt/keyrings/docker.gpg] \
+        https://download.docker.com/linux/debian \
+        $(lsb_release -cs) stable" \
+        > /etc/apt/sources.list.d/docker.list && \
+    apt-get update && apt-get install -y docker-ce-cli
 
-# Install kubectl
-RUN curl -LO "https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl" \
-    && chmod +x kubectl \
-    && mv kubectl /usr/local/bin/
+# Give jenkins user access to docker socket
+RUN groupadd -f docker && usermod -aG docker jenkins
 
-# Verify installations (optional but pro)
-RUN terraform -version && kubectl version --client && aws --version && docker --version
+# Pre-install Jenkins plugins
+COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
+RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
+
+USER jenkins
