@@ -1,13 +1,8 @@
 pipeline {
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Agent: run every stage inside the devops-agent container.
-    // The Docker socket is mounted so "docker build/push" work from inside.
-    // ─────────────────────────────────────────────────────────────────────────
     agent {
         docker {
             image 'lokeshkanneboina7/devops-agent:latest'
-            args  '--entrypoint= -v /var/run/docker.sock:/var/run/docker.sock'
+            args '--entrypoint="" -v /var/run/docker.sock:/var/run/docker.sock'
         }
     }
 
@@ -16,12 +11,12 @@ pipeline {
         ACCOUNT_ID   = "730024653391"
         CLUSTER_NAME = "realworld-eks"
         ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        OIDC_PROVIDER = ""
     }
 
     stages {
 
-        // ─────────────────────────────────────────────────────────────────────
-        stage('Checkout Code') {
+        stage('Checkout') {
             steps {
                 deleteDir()
                 git branch: 'main',
@@ -29,7 +24,6 @@ pipeline {
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
         stage('Set Image Tag') {
             steps {
                 script {
@@ -37,321 +31,190 @@ pipeline {
                         script: "git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
-                    echo "IMAGE_TAG = ${env.IMAGE_TAG}"
                 }
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        stage('Verify Tools') {
+        // ✅ ALWAYS SAFE (create if not exists)
+        stage('Ensure ECR') {
             steps {
-                sh '''
-                    set -e
-                    docker  --version
-                    aws     --version
-                    kubectl version --client
-                '''
-            }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        stage('Ensure Cluster Capacity') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                     sh '''
-                        set -e
+                    set -e
 
-                        echo "Getting nodegroup name..."
-                        NODEGROUP=$(aws eks list-nodegroups \
-                            --cluster-name ${CLUSTER_NAME} \
-                            --region       ${AWS_REGION}   \
-                            --query 'nodegroups[0]'        \
-                            --output text)
-                        echo "Nodegroup: $NODEGROUP"
+                    for repo in backend frontend; do
+                        aws ecr describe-repositories --repository-names $repo --region ${AWS_REGION} >/dev/null 2>&1 \
+                        || aws ecr create-repository --repository-name $repo --region ${AWS_REGION}
+                    done
 
-                        echo "Scaling EKS nodegroup..."
-                        aws eks update-nodegroup-config \
-                            --cluster-name  ${CLUSTER_NAME} \
-                            --nodegroup-name $NODEGROUP     \
-                            --scaling-config minSize=1,maxSize=3,desiredSize=2 \
-                            --region ${AWS_REGION}
-
-                        echo "Waiting 90s for nodes to register..."
-                        sleep 90
-
-                        aws eks update-kubeconfig \
-                            --region ${AWS_REGION} \
-                            --name   ${CLUSTER_NAME}
-
-                        echo "Waiting for nodes to be Ready..."
-                        kubectl wait --for=condition=Ready nodes --all --timeout=180s || true
-
-                        echo "Node status:"
-                        kubectl get nodes
+                    echo "ECR ready"
                     '''
                 }
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        stage('Get or Create Ingress URL') {
+        // ✅ INSTALL HELM + ALB CONTROLLER + IAM (FULL AUTO)
+        stage('Setup ALB Controller') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-                    script {
-                        sh 'aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}'
-
-                        def ingressUrl = sh(
-                            script: "kubectl get ingress app-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo ''",
-                            returnStdout: true
-                        ).trim()
-
-                        if (ingressUrl) {
-                            env.REACT_APP_API_URL = "http://${ingressUrl}"
-                            echo "Using existing Ingress URL: ${env.REACT_APP_API_URL}"
-                        } else {
-                            sh 'kubectl apply -f K8s/ingress.yaml || true'
-                            echo "Waiting up to 10 minutes for ALB to be provisioned..."
-
-                            sh '''
-                                for i in $(seq 1 40); do
-                                    URL=$(kubectl get ingress app-ingress \
-                                        -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
-                                        2>/dev/null || echo "")
-                                    if [ -n "$URL" ]; then
-                                        echo "GOT_URL=$URL"
-                                        break
-                                    fi
-                                    echo "Waiting for ALB... ($i/40)"
-                                    sleep 15
-                                done
-                            '''
-
-                            ingressUrl = sh(
-                                script: "kubectl get ingress app-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo ''",
-                                returnStdout: true
-                            ).trim()
-
-                            if (ingressUrl) {
-                                env.REACT_APP_API_URL = "http://${ingressUrl}"
-                                echo "Got new Ingress URL: ${env.REACT_APP_API_URL}"
-                            } else {
-                                error("""
-ALB Ingress URL not available after 10 minutes.
-Ensure the AWS Load Balancer Controller is installed:
-  helm repo add eks https://aws.github.io/eks-charts
-  helm install aws-load-balancer-controller eks/aws-load-balancer-controller \\
-      -n kube-system --set clusterName=${CLUSTER_NAME}
-""")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        stage('Build Docker Images') {
-            steps {
-                sh '''
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                    sh '''
                     set -e
 
-                    echo "Building backend..."
-                    docker build -t backend:${IMAGE_TAG} realWordJob
+                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                    echo "Building frontend (REACT_APP_API_URL=${REACT_APP_API_URL})..."
-                    docker build \
-                        --build-arg REACT_APP_API_URL=${REACT_APP_API_URL} \
-                        -t frontend:${IMAGE_TAG} \
-                        job-portal-frontend69
-                '''
-            }
-        }
+                    echo "Installing Helm..."
+                    curl -s https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-        // ─────────────────────────────────────────────────────────────────────
-        stage('Push to ECR') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-                    sh '''
-                        set -e
+                    helm repo add eks https://aws.github.io/eks-charts
+                    helm repo update
 
-                        aws ecr get-login-password --region ${AWS_REGION} \
-                            | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                    echo "Fetching OIDC..."
+                    OIDC=$(aws eks describe-cluster \
+                        --name ${CLUSTER_NAME} \
+                        --query "cluster.identity.oidc.issuer" \
+                        --output text | sed 's|https://||')
 
-                        docker tag backend:${IMAGE_TAG}  ${ECR_REGISTRY}/backend:${IMAGE_TAG}
-                        docker tag frontend:${IMAGE_TAG} ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
+                    echo "OIDC = $OIDC"
 
-                        docker push ${ECR_REGISTRY}/backend:${IMAGE_TAG}
-                        docker push ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
+                    echo "Creating IAM role for ALB..."
+
+                    cat <<EOF > trust.json
+{
+ "Version": "2012-10-17",
+ "Statement": [
+  {
+   "Effect": "Allow",
+   "Principal": {
+     "Federated": "arn:aws:iam::${ACCOUNT_ID}:oidc-provider/$OIDC"
+   },
+   "Action": "sts:AssumeRoleWithWebIdentity",
+   "Condition": {
+     "StringEquals": {
+       "$OIDC:sub": "system:serviceaccount:kube-system:aws-load-balancer-controller"
+     }
+   }
+  }
+ ]
+}
+EOF
+
+                    aws iam create-role \
+                        --role-name AmazonEKSLoadBalancerControllerRole \
+                        --assume-role-policy-document file://trust.json 2>/dev/null || true
+
+                    aws iam attach-role-policy \
+                        --role-name AmazonEKSLoadBalancerControllerRole \
+                        --policy-arn arn:aws:iam::aws:policy/ElasticLoadBalancingFullAccess \
+                        || true
+
+                    kubectl create serviceaccount aws-load-balancer-controller \
+                        -n kube-system 2>/dev/null || true
+
+                    kubectl annotate serviceaccount aws-load-balancer-controller \
+                        -n kube-system \
+                        eks.amazonaws.com/role-arn=arn:aws:iam::${ACCOUNT_ID}:role/AmazonEKSLoadBalancerControllerRole \
+                        --overwrite
+
+                    echo "Installing ALB Controller..."
+
+                    helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+                        -n kube-system \
+                        --set clusterName=${CLUSTER_NAME} \
+                        --set serviceAccount.create=false \
+                        --set serviceAccount.name=aws-load-balancer-controller \
+                        --set region=${AWS_REGION} \
+                        --set vpcId=$(aws eks describe-cluster --name ${CLUSTER_NAME} --query "cluster.resourcesVpcConfig.vpcId" --output text)
+
+                    echo "ALB Controller Ready"
                     '''
                 }
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        stage('Build Images') {
+            steps {
+                sh '''
+                docker build -t backend:${IMAGE_TAG} realWordJob
+                docker build -t frontend:${IMAGE_TAG} job-portal-frontend69
+                '''
+            }
+        }
+
+        stage('Push Images') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                    sh '''
+                    set -e
+
+                    aws ecr get-login-password --region ${AWS_REGION} \
+                    | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+
+                    docker tag backend:${IMAGE_TAG} ${ECR_REGISTRY}/backend:${IMAGE_TAG}
+                    docker tag frontend:${IMAGE_TAG} ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
+
+                    docker push ${ECR_REGISTRY}/backend:${IMAGE_TAG}
+                    docker push ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
+                    '''
+                }
+            }
+        }
+
         stage('Deploy to EKS') {
             steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                     sh '''
-                        set -e
+                    set -e
 
-                        aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                        echo "Applying core Kubernetes manifests (excluding ServiceMonitor)..."
-                        for f in K8s/*.yaml; do
-                            case "$f" in
-                                *servicemonitor*) echo "Skipping $f (will apply separately)" ;;
-                                *) kubectl apply -f "$f" || true ;;
-                            esac
-                        done
+                    kubectl apply -f K8s/
 
-                        echo "Applying ServiceMonitor (skipped if Prometheus CRD not installed)..."
-                        kubectl apply -f K8s/backend-servicemonitor.yaml 2>/dev/null \
-                            && echo "ServiceMonitor applied" \
-                            || echo "ServiceMonitor skipped - Prometheus Operator CRD not found"
+                    kubectl set image deployment/backend backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
+                    kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
 
-                        echo "Updating image tags to: ${IMAGE_TAG}"
-                        kubectl set image deployment/backend  backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
-                        kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
-
-                        echo "Waiting for rollout..."
-                        kubectl rollout status deployment/backend  --timeout=300s
-                        kubectl rollout status deployment/frontend --timeout=300s
+                    kubectl rollout status deployment/backend --timeout=300s
+                    kubectl rollout status deployment/frontend --timeout=300s
                     '''
                 }
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        stage('Verify Deployment') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-                    sh '''
-                        set -e
-                        aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-
-                        echo "--- Pods ---"
-                        kubectl get pods -o wide
-
-                        echo "--- Services ---"
-                        kubectl get svc
-
-                        echo "--- Deployments ---"
-                        kubectl get deployments
-
-                        echo "--- Ingress ---"
-                        kubectl get ingress
-                    '''
-                }
-            }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        stage('Get Application URL') {
-            steps {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-                    sh '''
-                        set -e
-                        aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-
-                        echo "Waiting for Ingress URL..."
-                        for i in $(seq 1 30); do
-                            INGRESS_URL=$(kubectl get ingress app-ingress \
-                                -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
-                                2>/dev/null || echo "")
-
-                            if [ -n "$INGRESS_URL" ]; then
-                                echo "======================================="
-                                echo "APPLICATION LIVE:"
-                                echo "http://$INGRESS_URL"
-                                echo "======================================="
-                                exit 0
-                            fi
-
-                            echo "Waiting... ($i/30)"
-                            sleep 10
-                        done
-
-                        echo "Ingress not ready after 5 minutes"
-                        exit 1
-                    '''
-                }
-            }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        stage('Cleanup') {
+        stage('Wait for ALB URL') {
             steps {
                 sh '''
-                    docker rmi backend:${IMAGE_TAG}  || true
-                    docker rmi frontend:${IMAGE_TAG} || true
+                set -e
+
+                echo "Waiting for ALB..."
+
+                for i in $(seq 1 40); do
+                    URL=$(kubectl get ingress app-ingress \
+                        -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
+                        2>/dev/null || echo "")
+
+                    if [ -n "$URL" ]; then
+                        echo "===================================="
+                        echo "APP LIVE: http://$URL"
+                        echo "===================================="
+                        exit 0
+                    fi
+
+                    echo "Waiting ($i/40)..."
+                    sleep 15
+                done
+
+                echo "ALB creation failed"
+                exit 1
                 '''
             }
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // post blocks MUST run inside a node{} context when using declarative
-    // pipelines with a docker agent, because the agent has already been torn
-    // down by the time post{} runs.  Wrapping in node('') re-acquires a
-    // workspace so that sh{} steps work correctly.
-    // ─────────────────────────────────────────────────────────────────────────
     post {
-
         success {
-            echo "CI/CD SUCCESS – fully automated deployment complete."
+            echo "🚀 FULL AUTOMATION SUCCESS"
         }
-
         failure {
-            // node('') gives us the FilePath context that sh{} requires
-            node('') {
-                withCredentials([[
-                    $class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-creds'
-                ]]) {
-                    sh '''
-                        aws eks update-kubeconfig \
-                            --region ${AWS_REGION} \
-                            --name   ${CLUSTER_NAME} || true
-
-                        echo "=== Pods ==="
-                        kubectl get pods -o wide || true
-
-                        echo "=== Describe Pods ==="
-                        kubectl describe pods || true
-
-                        echo "=== Backend logs ==="
-                        kubectl logs -l app=backend  --tail=50 || true
-
-                        echo "=== Frontend logs ==="
-                        kubectl logs -l app=frontend --tail=50 || true
-
-                        echo "=== MySQL logs ==="
-                        kubectl logs -l app=mysql    --tail=30 || true
-
-                        echo "=== PVC status ==="
-                        kubectl get pvc || true
-                    '''
-                }
-                echo "Deployment failed – check the logs above."
-            }
+            echo "❌ PIPELINE FAILED"
         }
     }
 }
