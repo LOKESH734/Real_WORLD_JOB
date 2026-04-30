@@ -35,7 +35,7 @@ pipeline {
             }
         }
 
-        // ✅ ECR AUTO
+        // ✅ ECR SAFE CREATE
         stage('Ensure ECR') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
@@ -56,6 +56,7 @@ pipeline {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                     sh '''
                     set -e
+
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
                     export VERIFY_CHECKSUM=false
@@ -80,7 +81,7 @@ pipeline {
             }
         }
 
-        // ✅ MONITORING (PROMETHEUS + GRAFANA)
+        // 🔥 FIXED MONITORING (SCALING + TIMEOUT + WAIT)
         stage('Setup Monitoring') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
@@ -89,17 +90,39 @@ pipeline {
 
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
+                    echo "Scaling nodegroup..."
+
+                    NODEGROUP=$(aws eks list-nodegroups \
+                        --cluster-name ${CLUSTER_NAME} \
+                        --region ${AWS_REGION} \
+                        --query 'nodegroups[0]' \
+                        --output text)
+
+                    aws eks update-nodegroup-config \
+                        --cluster-name ${CLUSTER_NAME} \
+                        --nodegroup-name $NODEGROUP \
+                        --scaling-config minSize=2,maxSize=4,desiredSize=2 \
+                        --region ${AWS_REGION}
+
+                    echo "Waiting for nodes..."
+                    sleep 90
+
                     helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
                     helm repo update
+
+                    echo "Installing Prometheus + Grafana..."
 
                     helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
                         -n monitoring \
                         --create-namespace \
                         --set grafana.service.type=LoadBalancer \
-                        --set prometheus.service.type=ClusterIP
+                        --set prometheus.service.type=ClusterIP \
+                        --set prometheus.prometheusSpec.resources.requests.memory=512Mi \
+                        --set prometheus.prometheusSpec.resources.requests.cpu=200m \
+                        --timeout 10m \
+                        --wait
 
-                    echo "Waiting for monitoring pods..."
-                    sleep 60
+                    echo "Monitoring Ready"
                     '''
                 }
             }
@@ -157,17 +180,13 @@ pipeline {
         stage('Get App URL') {
             steps {
                 sh '''
-                set -e
-
-                echo "Waiting for ALB..."
-
                 for i in $(seq 1 40); do
                     URL=$(kubectl get ingress app-ingress \
                         -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
                         2>/dev/null || echo "")
 
                     if [ -n "$URL" ]; then
-                        echo "APP URL: http://$URL"
+                        echo "🚀 APP URL: http://$URL"
                         break
                     fi
                     sleep 15
@@ -176,7 +195,7 @@ pipeline {
             }
         }
 
-        stage('Get Grafana URL') {
+        stage('Get Grafana Details') {
             steps {
                 sh '''
                 echo "Grafana Service:"
@@ -192,7 +211,7 @@ pipeline {
 
     post {
         success {
-            echo "🚀 FULL AUTOMATION SUCCESS (APP + MONITORING)"
+            echo "🚀 FULL PIPELINE SUCCESS (APP + MONITORING)"
         }
         failure {
             echo "❌ PIPELINE FAILED"
