@@ -2,7 +2,7 @@ pipeline {
     agent {
         docker {
             image 'lokeshkanneboina7/devops-agent:latest'
-            args '--entrypoint= -v /var/run/docker.sock:/var/run/docker.sock'
+            args '--entrypoint="" -v /var/run/docker.sock:/var/run/docker.sock'
         }
     }
 
@@ -38,7 +38,7 @@ pipeline {
                     dir('terraform') {
                         sh '''
                         export AWS_DEFAULT_REGION=${AWS_REGION}
-                        terraform init
+                        terraform init -upgrade
                         '''
                     }
                 }
@@ -54,16 +54,17 @@ pipeline {
                     dir('terraform') {
                         sh '''
                         export AWS_DEFAULT_REGION=${AWS_REGION}
-                        terraform plan -out=tfplan
+                        terraform plan -out=tfplan || exit 1
                         '''
                     }
                 }
             }
         }
 
+        // OPTIONAL (remove if you want auto)
         stage('Approval') {
             steps {
-                input message: "Do you want to apply Terraform changes?"
+                input message: "Apply Terraform changes?"
             }
         }
 
@@ -85,7 +86,7 @@ pipeline {
 
         stage('Trigger App Deployment') {
             steps {
-                build job: 'app-jenkins'
+                build job: 'App-Jenkinsfile'
             }
         }
     }
