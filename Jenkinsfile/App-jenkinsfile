@@ -35,7 +35,6 @@ pipeline {
             }
         }
 
-        // ✅ Ensure ECR repos exist
         stage('Ensure ECR') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
@@ -44,13 +43,11 @@ pipeline {
                         aws ecr describe-repositories --repository-names $repo --region ${AWS_REGION} >/dev/null 2>&1 \
                         || aws ecr create-repository --repository-name $repo --region ${AWS_REGION}
                     done
-                    echo "ECR READY"
                     '''
                 }
             }
         }
 
-        // ✅ Setup ALB Controller
         stage('Setup ALB Controller') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
@@ -74,31 +71,24 @@ pipeline {
                         --set serviceAccount.create=true \
                         --set region=${AWS_REGION} \
                         --set vpcId=$VPC_ID || true
-
-                    echo "ALB Controller Ready"
                     '''
                 }
             }
         }
 
-        // ✅ Build Docker images
         stage('Build Images') {
             steps {
                 sh '''
-                set -e
                 docker build -t backend:${IMAGE_TAG} realWordJob
                 docker build -t frontend:${IMAGE_TAG} job-portal-frontend69
                 '''
             }
         }
 
-        // ✅ Push to ECR
         stage('Push to ECR') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                     sh '''
-                    set -e
-
                     aws ecr get-login-password --region ${AWS_REGION} \
                     | docker login --username AWS --password-stdin ${ECR_REGISTRY}
 
@@ -112,8 +102,7 @@ pipeline {
             }
         }
 
-        // ✅ Deploy with SELF-HEAL FIX
-        stage('Deploy to EKS') {
+        stage('Deploy (SELF-HEAL + FALLBACK)') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                     sh '''
@@ -121,7 +110,7 @@ pipeline {
 
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                    echo "Applying Kubernetes resources..."
+                    echo "Applying manifests..."
                     for file in K8s/*.yaml; do
                         if echo "$file" | grep -q "servicemonitor"; then
                             echo "Skipping $file"
@@ -134,46 +123,42 @@ pipeline {
                     kubectl set image deployment/backend backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
                     kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
 
-                    echo "Scaling to avoid rollout block..."
+                    echo "Restarting deployments..."
+                    kubectl rollout restart deployment/backend
+                    kubectl rollout restart deployment/frontend
+
+                    echo "Trying rollout..."
+                    kubectl rollout status deployment/backend --timeout=120s || true
+
+                    echo "Fallback: full reset if stuck..."
+                    kubectl scale deployment backend --replicas=0 || true
+                    sleep 10
                     kubectl scale deployment backend --replicas=2 || true
 
-                    echo "Force deleting stuck pods..."
-                    kubectl delete pod -l app=backend --force --grace-period=0 || true
-
-                    echo "Waiting for rollout..."
                     kubectl rollout status deployment/backend --timeout=300s || true
                     kubectl rollout status deployment/frontend --timeout=300s || true
 
-                    echo "Pod Status:"
+                    echo "Final Pods:"
                     kubectl get pods -o wide
                     '''
                 }
             }
         }
 
-        // ✅ Get ALB URL
-        stage('Get Application URL') {
+        stage('Get URL') {
             steps {
                 sh '''
-                echo "Fetching ALB URL..."
-
                 for i in $(seq 1 40); do
                     URL=$(kubectl get ingress app-ingress \
                         -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
                         2>/dev/null || echo "")
 
                     if [ -n "$URL" ]; then
-                        echo "======================================="
-                        echo "🚀 APPLICATION LIVE:"
-                        echo "http://$URL"
-                        echo "======================================="
+                        echo "🚀 APP URL: http://$URL"
                         exit 0
                     fi
-
-                    echo "Waiting ($i/40)..."
                     sleep 15
                 done
-
                 echo "ALB not ready yet"
                 '''
             }
@@ -182,7 +167,7 @@ pipeline {
 
     post {
         success {
-            echo "🚀 PIPELINE SUCCESS"
+            echo "🚀 POWER PIPELINE SUCCESS"
         }
         failure {
             echo "❌ PIPELINE FAILED"
