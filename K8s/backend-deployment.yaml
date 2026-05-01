@@ -27,12 +27,11 @@ spec:
         tier: api
 
     spec:
-      terminationGracePeriodSeconds: 10
+      terminationGracePeriodSeconds: 30
 
       containers:
         - name: backend
 
-          # 🔥 FIXED REGION
           image: 730024653391.dkr.ecr.ap-south-1.amazonaws.com/backend:latest
 
           imagePullPolicy: Always
@@ -46,7 +45,6 @@ spec:
             - secretRef:
                 name: backend-secret
 
-          # 🔥 REDUCED MEMORY (CRITICAL)
           resources:
             requests:
               cpu: "100m"
@@ -55,14 +53,14 @@ spec:
               cpu: "500m"
               memory: "512Mi"
 
-          # 🔥 FASTER STARTUP
+          # App takes ~62s to start, so total window = 30 + (15×10) = 180s
           startupProbe:
             httpGet:
               path: /actuator/health
               port: 8086
-            initialDelaySeconds: 20
-            periodSeconds: 5
-            failureThreshold: 10
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 15
 
           readinessProbe:
             httpGet:
@@ -70,6 +68,7 @@ spec:
               port: 8086
             initialDelaySeconds: 10
             periodSeconds: 5
+            failureThreshold: 3
 
           livenessProbe:
             httpGet:
@@ -77,3 +76,4 @@ spec:
               port: 8086
             initialDelaySeconds: 20
             periodSeconds: 10
+            failureThreshold: 3
