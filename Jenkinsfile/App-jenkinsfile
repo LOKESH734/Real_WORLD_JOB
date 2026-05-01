@@ -78,6 +78,46 @@ pipeline {
             }
         }
 
+        // 🔥 NEW STAGE (AUTO FIX IAM)
+        stage('Fix IAM Permissions') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                    sh '''
+                    set -e
+
+                    NODEGROUP=$(aws eks list-nodegroups \
+                      --cluster-name ${CLUSTER_NAME} \
+                      --region ${AWS_REGION} \
+                      --query "nodegroups[0]" \
+                      --output text)
+
+                    ROLE_ARN=$(aws eks describe-nodegroup \
+                      --cluster-name ${CLUSTER_NAME} \
+                      --nodegroup-name $NODEGROUP \
+                      --region ${AWS_REGION} \
+                      --query "nodegroup.nodeRole" \
+                      --output text)
+
+                    ROLE_NAME=$(basename $ROLE_ARN)
+
+                    echo "Fixing IAM for: $ROLE_NAME"
+
+                    aws iam attach-role-policy \
+                      --role-name $ROLE_NAME \
+                      --policy-arn arn:aws:iam::aws:policy/ElasticLoadBalancingFullAccess || true
+
+                    aws iam attach-role-policy \
+                      --role-name $ROLE_NAME \
+                      --policy-arn arn:aws:iam::aws:policy/AmazonEC2FullAccess || true
+
+                    kubectl rollout restart deployment aws-load-balancer-controller -n kube-system
+
+                    echo "IAM fixed ✅"
+                    '''
+                }
+            }
+        }
+
         stage('Build Images') {
             steps {
                 sh '''
@@ -111,40 +151,34 @@ pipeline {
                     set -e
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                    echo "Applying manifests..."
                     kubectl apply -f K8s/ || true
 
                     echo "⏳ Waiting for MySQL..."
                     for i in $(seq 1 30); do
                         STATUS=$(kubectl get pods -l app=mysql -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "")
                         if [ "$STATUS" = "Running" ]; then
-                            echo "MySQL Running ✅"
+                            echo "MySQL Ready ✅"
                             break
                         fi
-                        echo "Waiting MySQL... $i"
                         sleep 10
                     done
 
-                    echo "Updating images..."
                     kubectl set image deployment/backend backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
                     kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
 
-                    echo "Restarting deployments..."
                     kubectl rollout restart deployment backend
                     kubectl rollout restart deployment frontend
 
-                    echo "Waiting rollout..."
                     kubectl rollout status deployment/backend --timeout=300s || true
                     kubectl rollout status deployment/frontend --timeout=300s
 
-                    echo "Pods:"
                     kubectl get pods -o wide
                     '''
                 }
             }
         }
 
-        // 🔥 FINAL MAGIC STAGE (WAIT FOR URL)
+        // 🔥 FINAL WAIT FOR URL (STABLE)
         stage('Wait for App URL') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
@@ -154,23 +188,22 @@ pipeline {
 
                     echo "⏳ Waiting for ALB URL..."
 
-                    for i in $(seq 1 40); do
-                        URL=$(kubectl get ingress app-ingress \
-                            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+                    for i in $(seq 1 60); do
+                      URL=$(kubectl get ingress app-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
 
-                        if [ -n "$URL" ]; then
-                            echo ""
-                            echo "🚀 APP LIVE:"
-                            echo "http://$URL"
-                            echo ""
-                            exit 0
-                        fi
+                      if [ -n "$URL" ] && [ "$URL" != "null" ]; then
+                        echo ""
+                        echo "🚀 APP LIVE:"
+                        echo "http://$URL"
+                        echo ""
+                        exit 0
+                      fi
 
-                        echo "Waiting... ($i/40)"
-                        sleep 15
+                      echo "Waiting... ($i/60)"
+                      sleep 10
                     done
 
-                    echo "❌ ALB URL not ready"
+                    echo "❌ ALB not ready"
                     kubectl get ingress app-ingress
                     exit 1
                     '''
