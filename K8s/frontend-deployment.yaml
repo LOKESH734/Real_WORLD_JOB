@@ -3,49 +3,39 @@ kind: Deployment
 metadata:
   name: frontend
   namespace: default
-  labels:
-    app: frontend
-    tier: web
 spec:
-  replicas: 2
+  replicas: 1   # 🔥 FIXED
+
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 0
+      maxUnavailable: 1
       maxSurge: 1
+
   selector:
     matchLabels:
       app: frontend
+
   template:
     metadata:
       labels:
         app: frontend
         tier: web
+
     spec:
       containers:
         - name: frontend
-          image: 846345203699.dkr.ecr.ap-south-2.amazonaws.com/frontend:dc1690e
-          imagePullPolicy: Always
+
+          # 🔥 FIXED REGION
+          image: 730024653391.dkr.ecr.ap-south-1.amazonaws.com/frontend:latest
+
           ports:
             - containerPort: 80
+
           resources:
             requests:
-              cpu: "100m"
+              cpu: "50m"
               memory: "128Mi"
             limits:
-              cpu: "300m"
+              cpu: "200m"
               memory: "256Mi"
-          readinessProbe:
-            httpGet:
-              path: /
-              port: 80
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            failureThreshold: 3
-          livenessProbe:
-            httpGet:
-              path: /
-              port: 80
-            initialDelaySeconds: 15
-            periodSeconds: 20
-            failureThreshold: 3

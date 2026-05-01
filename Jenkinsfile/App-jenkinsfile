@@ -91,25 +91,32 @@ pipeline {
                     aws ecr get-login-password --region ${AWS_REGION} \
                     | docker login --username AWS --password-stdin ${ECR_REGISTRY}
 
+                    # ── Backend: tag with git SHA and latest, push both ──
                     docker tag backend:${IMAGE_TAG} ${ECR_REGISTRY}/backend:${IMAGE_TAG}
-                    docker tag frontend:${IMAGE_TAG} ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
+                    docker tag backend:${IMAGE_TAG} ${ECR_REGISTRY}/backend:latest
 
                     docker push ${ECR_REGISTRY}/backend:${IMAGE_TAG}
+                    docker push ${ECR_REGISTRY}/backend:latest
+
+                    # ── Frontend: tag with git SHA and latest, push both ──
+                    docker tag frontend:${IMAGE_TAG} ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
+                    docker tag frontend:${IMAGE_TAG} ${ECR_REGISTRY}/frontend:latest
+
                     docker push ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
+                    docker push ${ECR_REGISTRY}/frontend:latest
                     '''
                 }
             }
         }
 
-        stage('Deploy (SELF-HEAL + FINAL FIX)') {
+        stage('Deploy') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                     sh '''
                     set -e
-
-                    echo "Applying manifests..."
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
+                    echo "Applying manifests..."
                     for file in K8s/*.yaml; do
                         if echo "$file" | grep -q "servicemonitor"; then
                             echo "Skipping $file"
@@ -118,38 +125,15 @@ pipeline {
                         fi
                     done
 
-                    echo "Updating images..."
-                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-
-                    kubectl set image deployment/backend backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
+                    echo "Updating deployment images to git SHA tag..."
+                    kubectl set image deployment/backend  backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
                     kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
 
-                    echo "Restarting deployments..."
-                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-
-                    kubectl rollout restart deployment/backend
-                    kubectl rollout restart deployment/frontend
-
-                    echo "Trying rollout..."
-                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-
-                    kubectl rollout status deployment/backend --timeout=120s || true
-
-                    echo "Fallback: full reset if stuck..."
-                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-
-                    kubectl scale deployment backend --replicas=0 || true
-                    sleep 10
-                    kubectl scale deployment backend --replicas=2 || true
-
-                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-
-                    kubectl rollout status deployment/backend --timeout=300s || true
-                    kubectl rollout status deployment/frontend --timeout=300s || true
+                    echo "Waiting for rollout..."
+                    kubectl rollout status deployment/backend  --timeout=300s
+                    kubectl rollout status deployment/frontend --timeout=300s
 
                     echo "Final Pods:"
-                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-
                     kubectl get pods -o wide
                     '''
                 }
@@ -158,32 +142,36 @@ pipeline {
 
         stage('Get URL') {
             steps {
-                sh '''
-                aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                    sh '''
+                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                for i in $(seq 1 40); do
-                    URL=$(kubectl get ingress app-ingress \
-                        -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
-                        2>/dev/null || echo "")
+                    for i in $(seq 1 40); do
+                        URL=$(kubectl get ingress app-ingress \
+                            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
+                            2>/dev/null || echo "")
 
-                    if [ -n "$URL" ]; then
-                        echo "🚀 APP URL: http://$URL"
-                        exit 0
-                    fi
-                    sleep 15
-                done
-                echo "ALB not ready yet"
-                '''
+                        if [ -n "$URL" ]; then
+                            echo "APP URL: http://$URL"
+                            exit 0
+                        fi
+                        echo "Waiting for ALB... attempt $i/40"
+                        sleep 15
+                    done
+                    echo "ALB not ready yet - check ingress manually"
+                    exit 1
+                    '''
+                }
             }
         }
     }
 
     post {
         success {
-            echo "🚀 POWER PIPELINE SUCCESS"
+            echo "PIPELINE SUCCESS - App deployed with image tag: ${env.IMAGE_TAG}"
         }
         failure {
-            echo "❌ PIPELINE FAILED"
+            echo "PIPELINE FAILED - Check logs above"
         }
     }
 }

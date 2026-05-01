@@ -10,11 +10,11 @@ module "eks" {
 
   enable_irsa = true
 
-  cluster_endpoint_public_access  = true
-  cluster_endpoint_private_access = true
+  cluster_endpoint_public_access       = true
+  cluster_endpoint_private_access      = true
   cluster_endpoint_public_access_cidrs = ["0.0.0.0/0"]
 
-  # ✅ Logging enabled (NOW SAFE — no deny policy blocking)
+  # ✅ Logging enabled
   cluster_enabled_log_types = [
     "api",
     "audit",
@@ -23,18 +23,18 @@ module "eks" {
     "scheduler"
   ]
 
-  # ✅ Correct access config
-  authentication_mode = "API"
+  # ✅ Access config
+  authentication_mode                      = "API"
   enable_cluster_creator_admin_permissions = true
 
-  # ✅ Managed Node Group
+  # ✅ Managed Node Group — upgraded to t3.medium
   eks_managed_node_groups = {
     default = {
-      instance_types = [var.node_instance_type]
+      instance_types = ["t3.medium"]  # ← upgraded from t3.micro
 
-      desired_size = 1
+      desired_size = 2   # ← increased for better pod distribution
       min_size     = 1
-      max_size     = 2
+      max_size     = 3   # ← increased headroom for scaling
 
       capacity_type = "ON_DEMAND"
       disk_size     = 20

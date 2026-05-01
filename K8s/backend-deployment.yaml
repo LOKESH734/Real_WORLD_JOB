@@ -6,64 +6,74 @@ metadata:
   labels:
     app: backend
     tier: api
+
 spec:
   replicas: 1
-  progressDeadlineSeconds: 600
-  revisionHistoryLimit: 3
+
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 0
+      maxUnavailable: 1
       maxSurge: 1
+
   selector:
     matchLabels:
       app: backend
+
   template:
     metadata:
       labels:
         app: backend
         tier: api
+
     spec:
-      terminationGracePeriodSeconds: 60
+      terminationGracePeriodSeconds: 10
+
       containers:
         - name: backend
-          image: 846345203699.dkr.ecr.ap-south-2.amazonaws.com/backend:fix1
+
+          # 🔥 FIXED REGION
+          image: 730024653391.dkr.ecr.ap-south-1.amazonaws.com/backend:latest
+
           imagePullPolicy: Always
+
           ports:
             - containerPort: 8086
+
           envFrom:
             - configMapRef:
                 name: backend-config
             - secretRef:
                 name: backend-secret
+
+          # 🔥 REDUCED MEMORY (CRITICAL)
           resources:
             requests:
-              cpu: "200m"
-              memory: "512Mi"
+              cpu: "100m"
+              memory: "256Mi"
             limits:
-              cpu: "1000m"
-              memory: "1Gi"
+              cpu: "500m"
+              memory: "512Mi"
+
+          # 🔥 FASTER STARTUP
           startupProbe:
             httpGet:
               path: /actuator/health
               port: 8086
-            initialDelaySeconds: 70
-            periodSeconds: 10
-            failureThreshold: 30
-            timeoutSeconds: 3
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            failureThreshold: 10
+
           readinessProbe:
             httpGet:
               path: /actuator/health/readiness
               port: 8086
-            initialDelaySeconds: 40
-            periodSeconds: 10
-            failureThreshold: 3
-            timeoutSeconds: 3
+            initialDelaySeconds: 10
+            periodSeconds: 5
+
           livenessProbe:
             httpGet:
               path: /actuator/health/liveness
               port: 8086
-            initialDelaySeconds: 50
-            periodSeconds: 20
-            failureThreshold: 3
-            timeoutSeconds: 3
+            initialDelaySeconds: 20
+            periodSeconds: 10
