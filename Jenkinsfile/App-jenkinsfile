@@ -48,7 +48,6 @@ pipeline {
             }
         }
 
-        // 🔥 FIXED HELM (NO OPENSSL ERROR)
         stage('Setup ALB Controller') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
@@ -105,7 +104,6 @@ pipeline {
             }
         }
 
-        // 🔥 FINAL FIXED DEPLOY
         stage('Deploy') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
@@ -139,19 +137,24 @@ pipeline {
                     kubectl rollout status deployment/backend --timeout=300s || true
                     kubectl rollout status deployment/frontend --timeout=300s
 
-                    echo "Pods status:"
+                    echo "Pods:"
                     kubectl get pods -o wide
                     '''
                 }
             }
         }
 
+        // ✅ FINAL FIXED STAGE
         stage('Get URL') {
             steps {
-                sh '''
-                echo "App URL:"
-                kubectl get ingress app-ingress
-                '''
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                    sh '''
+                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+
+                    echo "🌐 APP URL:"
+                    kubectl get ingress app-ingress
+                    '''
+                }
             }
         }
     }
