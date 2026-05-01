@@ -48,33 +48,7 @@ pipeline {
             }
         }
 
-        stage('Setup ALB Controller') {
-            steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-                    sh '''
-                    set -e
-                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-
-                    export VERIFY_CHECKSUM=false
-                    curl -s https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-
-                    helm repo add eks https://aws.github.io/eks-charts || true
-                    helm repo update
-
-                    VPC_ID=$(aws eks describe-cluster --name ${CLUSTER_NAME} \
-                        --query "cluster.resourcesVpcConfig.vpcId" --output text)
-
-                    helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
-                        -n kube-system \
-                        --set clusterName=${CLUSTER_NAME} \
-                        --set serviceAccount.create=true \
-                        --set region=${AWS_REGION} \
-                        --set vpcId=$VPC_ID || true
-                    '''
-                }
-            }
-        }
-
+        // 🔥 BUILD
         stage('Build Images') {
             steps {
                 sh '''
@@ -84,94 +58,130 @@ pipeline {
             }
         }
 
-        stage('Push to ECR') {
+        // 🔥 PUSH (NO latest)
+        stage('Push Images') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                     sh '''
                     aws ecr get-login-password --region ${AWS_REGION} \
                     | docker login --username AWS --password-stdin ${ECR_REGISTRY}
 
-                    # ── Backend: tag with git SHA and latest, push both ──
                     docker tag backend:${IMAGE_TAG} ${ECR_REGISTRY}/backend:${IMAGE_TAG}
-                    docker tag backend:${IMAGE_TAG} ${ECR_REGISTRY}/backend:latest
-
                     docker push ${ECR_REGISTRY}/backend:${IMAGE_TAG}
-                    docker push ${ECR_REGISTRY}/backend:latest
 
-                    # ── Frontend: tag with git SHA and latest, push both ──
                     docker tag frontend:${IMAGE_TAG} ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
-                    docker tag frontend:${IMAGE_TAG} ${ECR_REGISTRY}/frontend:latest
-
                     docker push ${ECR_REGISTRY}/frontend:${IMAGE_TAG}
-                    docker push ${ECR_REGISTRY}/frontend:latest
                     '''
                 }
             }
         }
 
-        stage('Deploy') {
+        // 🔥 CONNECT CLUSTER
+        stage('Connect EKS') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                     sh '''
-                    set -e
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-
-                    echo "Applying manifests..."
-                    for file in K8s/*.yaml; do
-                        if echo "$file" | grep -q "servicemonitor"; then
-                            echo "Skipping $file"
-                        else
-                            kubectl apply -f "$file" || true
-                        fi
-                    done
-
-                    echo "Updating deployment images to git SHA tag..."
-                    kubectl set image deployment/backend  backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
-                    kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
-
-                    echo "Waiting for rollout..."
-                    kubectl rollout status deployment/backend  --timeout=300s
-                    kubectl rollout status deployment/frontend --timeout=300s
-
-                    echo "Final Pods:"
-                    kubectl get pods -o wide
                     '''
                 }
             }
         }
 
+        // 🔥 APPLY ONLY ONCE SAFE MANIFESTS
+        stage('Apply Base Resources') {
+            steps {
+                sh '''
+                kubectl apply -f K8s/mysql.yaml || true
+                kubectl apply -f K8s/backend.yaml || true
+                kubectl apply -f K8s/frontend.yaml || true
+                kubectl apply -f K8s/ingress.yaml || true
+                '''
+            }
+        }
+
+        // 🔥 WAIT FOR MYSQL (CRITICAL FIX)
+        stage('Wait for MySQL') {
+            steps {
+                sh '''
+                echo "Waiting for MySQL..."
+                for i in $(seq 1 30); do
+                    STATUS=$(kubectl get pods -l app=mysql -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "")
+                    if [ "$STATUS" = "Running" ]; then
+                        echo "MySQL is running ✅"
+                        exit 0
+                    fi
+                    echo "Waiting for MySQL... $i/30"
+                    sleep 10
+                done
+                echo "MySQL failed to start ❌"
+                kubectl get pods
+                exit 1
+                '''
+            }
+        }
+
+        // 🔥 UPDATE IMAGES
+        stage('Deploy New Version') {
+            steps {
+                sh '''
+                kubectl set image deployment/backend backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
+                kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
+                '''
+            }
+        }
+
+        // 🔥 ROLLOUT
+        stage('Verify Deployment') {
+            steps {
+                sh '''
+                kubectl rollout status deployment/backend --timeout=300s
+                kubectl rollout status deployment/frontend --timeout=300s
+                '''
+            }
+        }
+
+        // 🔥 FINAL CHECK
+        stage('Final Status') {
+            steps {
+                sh '''
+                echo "Pods:"
+                kubectl get pods -o wide
+
+                echo "Services:"
+                kubectl get svc
+                '''
+            }
+        }
+
+        // 🔥 GET URL
         stage('Get URL') {
             steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-                    sh '''
-                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+                sh '''
+                for i in $(seq 1 40); do
+                    URL=$(kubectl get ingress app-ingress \
+                        -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
+                        2>/dev/null || echo "")
 
-                    for i in $(seq 1 40); do
-                        URL=$(kubectl get ingress app-ingress \
-                            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
-                            2>/dev/null || echo "")
-
-                        if [ -n "$URL" ]; then
-                            echo "APP URL: http://$URL"
-                            exit 0
-                        fi
-                        echo "Waiting for ALB... attempt $i/40"
-                        sleep 15
-                    done
-                    echo "ALB not ready yet - check ingress manually"
-                    exit 1
-                    '''
-                }
+                    if [ -n "$URL" ]; then
+                        echo "APP URL: http://$URL"
+                        exit 0
+                    fi
+                    echo "Waiting for ALB... $i/40"
+                    sleep 15
+                done
+                echo "ALB not ready"
+                exit 1
+                '''
             }
         }
     }
 
     post {
         success {
-            echo "PIPELINE SUCCESS - App deployed with image tag: ${env.IMAGE_TAG}"
+            echo "✅ PIPELINE SUCCESS - App is LIVE"
         }
         failure {
-            echo "PIPELINE FAILED - Check logs above"
+            echo "❌ PIPELINE FAILED - Check logs"
         }
     }
 }
