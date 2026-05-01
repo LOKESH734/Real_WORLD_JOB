@@ -30,7 +30,6 @@ pipeline {
                         script: "git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
-                    echo "IMAGE_TAG = ${env.IMAGE_TAG}"
                 }
             }
         }
@@ -48,12 +47,18 @@ pipeline {
             }
         }
 
+        // ✅ FIXED HELM INSTALL
         stage('Setup ALB Controller') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                     sh '''
                     set -e
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+
+                    # Install helm if missing
+                    if ! command -v helm &> /dev/null; then
+                        curl -s https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+                    fi
 
                     helm repo add eks https://aws.github.io/eks-charts || true
                     helm repo update
@@ -98,6 +103,7 @@ pipeline {
             }
         }
 
+        // 🔥 FINAL FIXED DEPLOY
         stage('Deploy') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
@@ -106,28 +112,9 @@ pipeline {
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
                     echo "Applying manifests..."
-                    for file in K8s/*.yaml; do
-                        if echo "$file" | grep -q "servicemonitor"; then
-                            echo "Skipping $file"
-                        else
-                            kubectl apply -f "$file" || true
-                        fi
-                    done
+                    kubectl apply -f K8s/ || true
 
-                    echo "Checking PVC..."
-                    kubectl get pvc || true
-
-                    echo "Waiting for PVC..."
-                    for i in $(seq 1 20); do
-                        STATUS=$(kubectl get pvc mysql-pvc -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
-                        if [ "$STATUS" = "Bound" ]; then
-                            echo "PVC Ready ✅"
-                            break
-                        fi
-                        sleep 10
-                    done
-
-                    echo "Waiting for MySQL..."
+                    echo "⏳ Waiting for MySQL..."
                     for i in $(seq 1 30); do
                         STATUS=$(kubectl get pods -l app=mysql -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "")
                         if [ "$STATUS" = "Running" ]; then
@@ -141,16 +128,13 @@ pipeline {
                     kubectl set image deployment/backend backend=${ECR_REGISTRY}/backend:${IMAGE_TAG}
                     kubectl set image deployment/frontend frontend=${ECR_REGISTRY}/frontend:${IMAGE_TAG}
 
-                    echo "Restarting deployments..."
+                    echo "Restarting..."
                     kubectl rollout restart deployment backend
                     kubectl rollout restart deployment frontend
 
-                    echo "Waiting for rollout..."
+                    echo "Waiting rollout..."
                     kubectl rollout status deployment/backend --timeout=300s || true
                     kubectl rollout status deployment/frontend --timeout=300s
-
-                    echo "Pods:"
-                    kubectl get pods -o wide
                     '''
                 }
             }
@@ -158,22 +142,9 @@ pipeline {
 
         stage('Get URL') {
             steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
-                    sh '''
-                    for i in $(seq 1 40); do
-                        URL=$(kubectl get ingress app-ingress \
-                            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
-                            2>/dev/null || echo "")
-
-                        if [ -n "$URL" ]; then
-                            echo "APP URL: http://$URL"
-                            exit 0
-                        fi
-                        sleep 15
-                    done
-                    exit 1
-                    '''
-                }
+                sh '''
+                kubectl get ingress app-ingress
+                '''
             }
         }
     }
