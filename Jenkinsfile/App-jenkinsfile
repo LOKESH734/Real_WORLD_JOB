@@ -144,15 +144,35 @@ pipeline {
             }
         }
 
-        // ✅ FINAL FIXED STAGE
-        stage('Get URL') {
+        // 🔥 FINAL MAGIC STAGE (WAIT FOR URL)
+        stage('Wait for App URL') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
                     sh '''
+                    set -e
                     aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
 
-                    echo "🌐 APP URL:"
+                    echo "⏳ Waiting for ALB URL..."
+
+                    for i in $(seq 1 40); do
+                        URL=$(kubectl get ingress app-ingress \
+                            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+
+                        if [ -n "$URL" ]; then
+                            echo ""
+                            echo "🚀 APP LIVE:"
+                            echo "http://$URL"
+                            echo ""
+                            exit 0
+                        fi
+
+                        echo "Waiting... ($i/40)"
+                        sleep 15
+                    done
+
+                    echo "❌ ALB URL not ready"
                     kubectl get ingress app-ingress
+                    exit 1
                     '''
                 }
             }
@@ -164,7 +184,7 @@ pipeline {
             echo "✅ PIPELINE SUCCESS - APP IS LIVE"
         }
         failure {
-            echo "❌ PIPELINE FAILED - CHECK LOGS"
+            echo "❌ PIPELINE FAILED"
         }
     }
 }
