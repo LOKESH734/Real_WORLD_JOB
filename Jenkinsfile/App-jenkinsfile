@@ -78,7 +78,6 @@ pipeline {
             }
         }
 
-        // 🔥 NEW STAGE (AUTO FIX IAM)
         stage('Fix IAM Permissions') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
@@ -123,6 +122,16 @@ pipeline {
                 sh '''
                 docker build -t backend:${IMAGE_TAG} realWordJob
                 docker build -t frontend:${IMAGE_TAG} job-portal-frontend69
+                '''
+            }
+        }
+
+        // 🔥 NEW TEST STAGE
+        stage('Test') {
+            steps {
+                sh '''
+                echo "🧪 Running unit tests..."
+                mvn test || exit 1
                 '''
             }
         }
@@ -178,7 +187,6 @@ pipeline {
             }
         }
 
-        // 🔥 FINAL WAIT FOR URL (STABLE)
         stage('Wait for App URL') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
@@ -217,7 +225,24 @@ pipeline {
             echo "✅ PIPELINE SUCCESS - APP IS LIVE"
         }
         failure {
-            echo "❌ PIPELINE FAILED"
+            echo "❌ PIPELINE FAILED - DEBUGGING INFO"
+
+            sh '''
+            echo "📦 Docker Containers:"
+            docker ps -a || true
+
+            echo "☸️ Kubernetes Pods:"
+            kubectl get pods -A || true
+
+            echo "📜 Backend Logs:"
+            kubectl logs -l app=backend --tail=50 || true
+
+            echo "📜 Frontend Logs:"
+            kubectl logs -l app=frontend --tail=50 || true
+
+            echo "🧠 Describe Backend Pods:"
+            kubectl describe pods -l app=backend || true
+            '''
         }
     }
 }
